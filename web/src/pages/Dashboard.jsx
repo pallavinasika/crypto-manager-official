@@ -52,7 +52,7 @@ export default function Dashboard() {
       ])
       setLoading(false)
     }
-    
+
     fetchData()
 
     // Live updates
@@ -71,8 +71,8 @@ export default function Dashboard() {
   const handleGenerateReport = async (type = 'portfolio') => {
     setIsGeneratingReport(true)
     try {
-      const endpoint = type === 'portfolio' 
-        ? `/api/report/portfolio/${portfolio.id}` 
+      const endpoint = type === 'portfolio'
+        ? `/api/report/portfolio/${portfolio.id}`
         : '/api/report/market'
       const res = await apiFetch(endpoint, { auth: true })
       setLastReport(res.data)
@@ -87,19 +87,19 @@ export default function Dashboard() {
 
   const stats = useMemo(() => {
     if (!portfolio) return { totalValue: 0, totalPl: 0, totalPlPct: 0 }
-    
+
     let currentTotal = 0
     let costBasisTotal = 0
-    
+
     portfolio.assets?.forEach(asset => {
       const currentPrice = livePrices[asset.coin_id] || asset.current_price
       currentTotal += asset.quantity * currentPrice
       costBasisTotal += asset.quantity * asset.purchase_price
     })
-    
+
     const totalPl = currentTotal - costBasisTotal
     const totalPlPct = costBasisTotal > 0 ? (totalPl / costBasisTotal * 100) : 0
-    
+
     return {
       totalValue: currentTotal,
       totalPl,
@@ -113,7 +113,7 @@ export default function Dashboard() {
   }, [marketData])
 
   const chartData = useMemo(() => {
-    return btcHistory.map(item => ({
+    return [...btcHistory].reverse().map(item => ({
       name: new Date(item.timestamp).toLocaleDateString(undefined, { weekday: 'short' }),
       value: item.price
     }))
@@ -133,8 +133,8 @@ export default function Dashboard() {
       </header>
 
       {(!portfolio || portfolio.assets?.length === 0) && (
-        <div className="card" style={{ 
-          marginBottom: '2.5rem', 
+        <div className="card" style={{
+          marginBottom: '2.5rem',
           background: 'linear-gradient(90deg, rgba(0, 212, 255, 0.1), rgba(123, 47, 239, 0.1))',
           border: '1px solid rgba(0, 212, 255, 0.2)',
           padding: '2rem',
@@ -148,8 +148,8 @@ export default function Dashboard() {
             <h2 style={{ fontSize: '1.5rem', fontWeight: 700, marginBottom: '0.5rem' }}>Ready to start tracking?</h2>
             <p style={{ color: 'var(--text-muted)' }}>Your dashboard is currently empty. Add your first asset to see your portfolio performance here.</p>
           </div>
-          <button 
-            className="btn" 
+          <button
+            className="btn"
             onClick={() => window.location.href = '/portfolio'}
             style={{ padding: '0.8rem 2rem', borderRadius: '12px' }}
           >
@@ -204,14 +204,14 @@ export default function Dashboard() {
               <AreaChart data={chartData}>
                 <defs>
                   <linearGradient id="colorValue" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="var(--primary)" stopOpacity={0.3}/>
-                    <stop offset="95%" stopColor="var(--primary)" stopOpacity={0}/>
+                    <stop offset="5%" stopColor="var(--primary)" stopOpacity={0.3} />
+                    <stop offset="95%" stopColor="var(--primary)" stopOpacity={0} />
                   </linearGradient>
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
                 <XAxis dataKey="name" stroke="var(--text-muted)" fontSize={12} axisLine={false} tickLine={false} />
                 <YAxis hide domain={['auto', 'auto']} />
-                <Tooltip 
+                <Tooltip
                   contentStyle={{ background: '#0d1b2a', border: '1px solid var(--border)', borderRadius: '12px', boxShadow: '0 10px 30px rgba(0,0,0,0.3)' }}
                   itemStyle={{ color: 'white', fontWeight: 600 }}
                   labelStyle={{ color: 'var(--text-muted)', marginBottom: '4px' }}
@@ -253,9 +253,9 @@ export default function Dashboard() {
             </h3>
             <p style={{ color: 'var(--text-muted)', fontSize: '1rem' }}>Generate detailed PDF/CSV summaries of your performance and market conditions.</p>
           </div>
-          
+
           <div style={{ display: 'flex', gap: '1rem' }}>
-            <button 
+            <button
               onClick={() => handleGenerateReport('market')}
               disabled={isGeneratingReport}
               className="btn btn-secondary"
@@ -263,7 +263,7 @@ export default function Dashboard() {
             >
               Market Overview
             </button>
-            <button 
+            <button
               onClick={() => handleGenerateReport('portfolio')}
               disabled={isGeneratingReport || !portfolio}
               className="btn btn-primary"
@@ -285,9 +285,9 @@ export default function Dashboard() {
                 <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Generated at {new Date(lastReport.generated_at).toLocaleString()}</div>
               </div>
             </div>
-            <a 
-              href={`${API_BASE.replace('/api', '')}/reports/${lastReport.csv_path.split(/[\\/]/).pop()}`} 
-              target="_blank" 
+            <a
+              href={`${API_BASE.replace('/api', '')}/reports/${lastReport.csv_path.split(/[\\/]/).pop()}`}
+              target="_blank"
               rel="noreferrer"
               className="btn"
               style={{ padding: '0.6rem 1.2rem', fontSize: '0.9rem', borderRadius: '10px' }}

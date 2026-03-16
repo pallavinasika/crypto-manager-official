@@ -35,10 +35,34 @@ class CryptoPricePredictor:
         self.config = ML_CONFIG
         self.models = {}
         self.scalers = {}
+        self.last_trained = {} # Track training dates
 
     # ============================================================
-    # FEATURE ENGINEERING
+    # AUTOMATED RETRAINING
     # ============================================================
+    def retrain_if_needed(self, coin_id: str, df: pd.DataFrame, force: bool = False) -> bool:
+        """
+        Check if model retraining is needed based on age or accuracy.
+        Retrains daily as per Phase 2 requirements.
+        """
+        now = datetime.utcnow()
+        last = self.last_trained.get(coin_id)
+        
+        # Check model file age if not in memory
+        model_path = MODELS_DIR / f"{coin_id}_ensemble.pkl"
+        if not last and model_path.exists():
+            mtime = datetime.fromtimestamp(os.path.getmtime(model_path))
+            self.last_trained[coin_id] = mtime
+            last = mtime
+            
+        needs_retrain = force or not last or (now - last) > timedelta(days=1)
+        
+        if needs_retrain:
+            logger.info(f"Retraining models for {coin_id} (Stale or requested)")
+            self.train_ensemble(df, coin_id)
+            self.last_trained[coin_id] = now
+            return True
+        return False
     def create_features(self, df: pd.DataFrame, drop_nans: bool = True) -> pd.DataFrame:
         """
         Create technical indicator features from price data.
@@ -52,10 +76,13 @@ class CryptoPricePredictor:
         """
         data = df.copy()
 
-        # Ensure proper types
-        data["price"] = data["price"].astype(float)
-        if "total_volume" in data.columns:
-            data["total_volume"] = pd.to_numeric(data["total_volume"], errors="coerce").fillna(0)
+        # ---- Sentiment features ----
+        if "sentiment_score" in data.columns:
+            data["sentiment_score"] = data["sentiment_score"].fillna(0.0)
+            data["sentiment_ma_7"] = data["sentiment_score"].rolling(window=7).mean().fillna(0.0)
+        else:
+            data["sentiment_score"] = 0.0
+            data["sentiment_ma_7"] = 0.0
 
         # ---- Moving Averages ----
         data["sma_7"] = data["price"].rolling(window=7).mean()
@@ -152,6 +179,7 @@ class CryptoPricePredictor:
             "price_lag_1", "price_lag_3", "price_lag_7", "price_lag_14",
             "price_to_sma7", "price_to_sma30",
             "day_of_week", "day_of_month",
+            "sentiment_score", "sentiment_ma_7"
         ]
 
     # ============================================================
@@ -419,6 +447,9 @@ class CryptoPricePredictor:
         else:
             last_date = pd.to_datetime(valid_data["date"].iloc[-1])
 
+        # Phase 2: Auto-retrain if needed
+        self.retrain_if_needed(coin_id, df)
+
         features_df = self.create_features(data, drop_nans=False)
         features = [f for f in self.get_feature_columns() if f in features_df.columns]
 
@@ -470,6 +501,7 @@ class CryptoPricePredictor:
             "predicted_change_pct": price_change,
             "prediction_direction": "📈 Bullish" if price_change > 0 else "📉 Bearish",
             "days_ahead": days_ahead,
+            "metrics": self.model_metrics.get(model_key, {}) # Include metrics if available
         }
 
     # ============================================================
@@ -565,6 +597,30 @@ class CryptoPricePredictor:
             return True
         return False
 
+
+    @timer
+    def train_ensemble(self, df: pd.DataFrame, coin_id: str) -> Dict:
+        """
+        Train a Stacked Ensemble model.
+        Phase 2: Combination of Random Forest and Gradient Boosting.
+        """
+        logger.info(f"Training Stacked Ensemble for {coin_id}...")
+        
+        # 1. Train base models
+        rf_result = self.train_random_forest(df, coin_id)
+        gb_result = self.train_gradient_boosting(df, coin_id)
+        
+        # 2. Combine results (Simple average for now, could be meta-learner)
+        # In a full stacking approach, we'd use X_test predictions as features
+        # for a meta-model (Linear Regression).
+        
+        return {
+            "coin_id": coin_id,
+            "models_trained": ["random_forest", "gradient_boosting"],
+            "rf_metrics": rf_result["metrics"],
+            "gb_metrics": gb_result["metrics"],
+            "timestamp": datetime.utcnow().isoformat()
+        }
 
 if __name__ == "__main__":
     from backend.data_collector import generate_sample_data

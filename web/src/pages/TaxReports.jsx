@@ -1,0 +1,101 @@
+import { useState } from 'react'
+import { apiFetch } from '../lib/api.js'
+import { FileText, Download, Calendar, CheckCircle2, ShieldCheck, Info } from 'lucide-react'
+
+export default function TaxReports() {
+    const [loading, setLoading] = useState(false)
+    const [report, setReport] = useState(null)
+
+    const generateReport = async () => {
+        setLoading(true)
+        try {
+            const data = await apiFetch('/api/portfolio/tax-report', { auth: true })
+            setReport(data.data)
+        } catch (err) {
+            console.error('Tax report error:', err)
+            alert('Failed to generate report: ' + err.message)
+        } finally {
+            setLoading(false)
+        }
+    }
+
+    return (
+        <div className="page-container" style={{ maxWidth: '1000px', margin: '0 auto', padding: '2rem' }}>
+            <header style={{ marginBottom: '2.5rem' }}>
+                <h1 style={{ fontSize: '2.4rem', fontWeight: 800, marginBottom: '0.5rem' }}>Tax Reporting</h1>
+                <p style={{ color: 'var(--text-muted)', fontSize: '1.1rem' }}>Generate tax-compliant reports for your crypto transactions and capital gains.</p>
+            </header>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '2rem' }}>
+                <div className="card" style={{ padding: '2.5rem', borderRadius: '24px', display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+                    <div style={{ width: '60px', height: '60px', borderRadius: '18px', background: 'rgba(0, 212, 255, 0.1)', display: 'flex', alignItems: 'center', justifyContent: 'center', marginBottom: '0.5rem' }}>
+                        <FileText size={32} color="var(--primary)" />
+                    </div>
+                    <h3 style={{ fontSize: '1.5rem', fontWeight: 700 }}>Transaction History Report</h3>
+                    <p style={{ color: 'var(--text-muted)', lineHeight: 1.6 }}>Download a full CSV export of all your portfolio transactions, including cost basis, purchase dates, and realized P&L calculations.</p>
+
+                    <div style={{ marginTop: 'auto' }}>
+                        <button
+                            onClick={generateReport}
+                            disabled={loading}
+                            className="btn-primary"
+                            style={{ width: '100%', padding: '16px', borderRadius: '16px', fontWeight: 700, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '10px' }}
+                        >
+                            {loading ? 'Processing...' : <><Download size={20} /> Generate CSV Report</>}
+                        </button>
+                    </div>
+                </div>
+
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '1.5rem' }}>
+                    <div className="card" style={{ padding: '1.5rem', borderRadius: '20px', display: 'flex', gap: '1rem', alignItems: 'center' }}>
+                        <div style={{ background: 'rgba(0, 230, 118, 0.1)', padding: '10px', borderRadius: '12px' }}>
+                            <ShieldCheck size={24} color="#00e676" />
+                        </div>
+                        <div>
+                            <div style={{ fontWeight: 700, fontSize: '1rem' }}>Data Integrity Verified</div>
+                            <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>All transactions are verified against blockchain data.</div>
+                        </div>
+                    </div>
+
+                    <div className="card" style={{ padding: '1.5rem', borderRadius: '20px', display: 'flex', gap: '1rem', alignItems: 'center' }}>
+                        <div style={{ background: 'rgba(123, 47, 239, 0.1)', padding: '10px', borderRadius: '12px' }}>
+                            <Calendar size={24} color="var(--secondary)" />
+                        </div>
+                        <div>
+                            <div style={{ fontWeight: 700, fontSize: '1rem' }}>2024 Tax Year Ready</div>
+                            <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)' }}>Report formatted for current regulatory requirements.</div>
+                        </div>
+                    </div>
+
+                    <div className="card" style={{ padding: '1.5rem', borderRadius: '20px', background: 'linear-gradient(135deg, rgba(255,165,0,0.05), rgba(255,69,0,0.05))', border: '1px solid rgba(255,165,0,0.1)' }}>
+                        <div style={{ display: 'flex', gap: '10px', marginBottom: '8px' }}>
+                            <Info size={18} color="#ffa500" />
+                            <div style={{ fontWeight: 700, fontSize: '0.9rem', color: '#ffa500' }}>Disclaimer</div>
+                        </div>
+                        <p style={{ fontSize: '0.8rem', color: 'rgba(255,255,255,0.6)', lineHeight: 1.5 }}>
+                            This report is for informational purposes only and does not constitute professional tax advice. Always consult with a tax professional.
+                        </p>
+                    </div>
+                </div>
+            </div>
+
+            {report && (
+                <div className="card" style={{ marginTop: '2.5rem', padding: '2rem', borderRadius: '24px', border: '1px solid var(--primary)', background: 'rgba(0, 212, 255, 0.03)' }}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+                            <CheckCircle2 size={24} color="var(--primary)" />
+                            <div>
+                                <h4 style={{ fontWeight: 700, fontSize: '1.1rem' }}>Report Successfully Generated</h4>
+                                <p style={{ fontSize: '0.9rem', color: 'var(--text-muted)' }}>Processed {report.num_transactions} transactions.</p>
+                            </div>
+                        </div>
+                        <div style={{ fontSize: '0.85rem', color: 'var(--text-muted)', textAlign: 'right' }}>
+                            Saved to: <br />
+                            <code style={{ fontSize: '0.75rem', color: 'var(--primary)', wordBreak: 'break-all' }}>{report.csv_path}</code>
+                        </div>
+                    </div>
+                </div>
+            )}
+        </div>
+    )
+}

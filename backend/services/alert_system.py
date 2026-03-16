@@ -8,11 +8,13 @@ from bson import ObjectId
 from database.mongo_connection import get_database
 from utils.helpers import logger, format_currency, format_percentage
 from config.settings import ALERT_CONFIG, EMAIL_CONFIG
+from backend.services.notification_service import NotificationService
 
 class AlertSystem:
     def __init__(self):
         self.config = ALERT_CONFIG
         self.email_config = EMAIL_CONFIG
+        self.notifier = NotificationService()
         self.alerts_triggered = []
 
     async def create_price_alert(self, user_id, coin_id, alert_type="price_above", threshold=None, message=""):
@@ -64,6 +66,12 @@ class AlertSystem:
                             "user_id": str(alert["user_id"]),
                             "message": f"Alert triggered for {alert['coin_id']}: Price reached {price}"
                         })
+                        
+                        # Phase 3: Send real-time notifications
+                        msg = f"🚀 {alert['coin_id'].upper()} Alert: Price reached {format_currency(price)} (Threshold: {format_currency(threshold)})"
+                        await self.notifier.send_discord_webhook("Price Alert Triggered", msg)
+                        await self.notifier.send_telegram_message(msg)
+                        
             return triggered
         except Exception as e:
             logger.error(f"Error checking alerts: {e}")

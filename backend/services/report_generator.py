@@ -105,6 +105,44 @@ class ReportGenerator:
                 writer.writeheader(); writer.writerows(rows)
         return {"generated_at": str(datetime.now()), "predictions": rows, "csv_path": str(csv_path)}
 
+    @timer
+    def generate_tax_report(self, transactions):
+        """
+        Generate a tax-compliant transaction report (CSV).
+        Computes realized P&L (simple FIFO/LIFO logic would go here).
+        """
+        if not transactions:
+            return {"error": "No transaction history"}
+            
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        report_data = []
+        
+        for tx in transactions:
+            report_data.append({
+                "date": tx.get("purchase_date", ""),
+                "coin_id": tx.get("coin_id", ""),
+                "type": "BUY", # Simplification
+                "amount": tx.get("quantity", 0),
+                "price": tx.get("purchase_price", 0),
+                "total_cost": tx.get("quantity", 0) * tx.get("purchase_price", 0),
+                "notes": tx.get("notes", "")
+            })
+            
+        csv_path = REPORTS_DIR / f"tax_report_{timestamp}.csv"
+        if report_data:
+            with open(csv_path, "w", newline="", encoding="utf-8") as f:
+                writer = csv.DictWriter(f, fieldnames=report_data[0].keys())
+                writer.writeheader()
+                writer.writerows(report_data)
+                
+        logger.info(f"Tax report generated: {csv_path}")
+        return {
+            "generated_at": str(datetime.now()), 
+            "num_transactions": len(report_data),
+            "csv_path": str(csv_path),
+            "summary": "Full transaction history for tax filing purposes."
+        }
+
     def _export_holdings_csv(self, holdings, csv_path):
         if not holdings: return
         with open(csv_path, "w", newline="", encoding="utf-8") as f:

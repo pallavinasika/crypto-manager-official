@@ -30,6 +30,19 @@ def run_api():
     uvicorn.run("backend.api.server:socket_app", host=API_HOST, port=API_PORT, reload=True)
 
 
+def run_dashboard():
+    """Launch the React dashboard."""
+    print("\n🖥️ Launching AI Crypto Dashboard...")
+    web_dir = Path(__file__).resolve().parent / "web"
+    
+    if not (web_dir / "node_modules").exists():
+        print("📦 node_modules not found. Installing dependencies...")
+        subprocess.run(["npm", "install"], cwd=web_dir, shell=True)
+    
+    # Use shell=True for Windows to find npm/vite
+    subprocess.run(["npm", "run", "dev"], cwd=web_dir, shell=True)
+
+
 def run_analysis():
     """Run comprehensive analysis with parallel processing."""
     print("\n" + "=" * 60)
@@ -38,6 +51,8 @@ def run_analysis():
 
     # Load data from MongoDB
     async def load_data():
+        from database.mongo_connection import connect_to_mongo
+        await connect_to_mongo()
         collector = CryptoDataCollector()
         coins_to_analyze = DEFAULT_CRYPTOS[:5]
         datasets = {}
@@ -167,7 +182,9 @@ def run_setup():
     print("=" * 60)
     
     async def setup_async():
+        from database.mongo_connection import connect_to_mongo
         from backend.api.server import seed_initial_data
+        await connect_to_mongo()
         await seed_initial_data()
         
     asyncio.run(setup_async())
@@ -184,6 +201,7 @@ Commands:
   api        Launch the FastAPI REST API server with WebSockets
   analyze    Run full analysis with parallel processing
   setup      Initialize database and seed initial market data
+  dashboard  Launch the modern React web dashboard
 
 Examples:
   python main.py api
@@ -192,7 +210,7 @@ Examples:
         """
     )
     parser.add_argument("command", nargs="?", default="api",
-        choices=["api", "analyze", "setup"],
+        choices=["api", "analyze", "setup", "dashboard"],
         help="Command to execute (default: api)")
 
     args = parser.parse_args()
@@ -203,6 +221,8 @@ Examples:
         run_analysis()
     elif args.command == "setup":
         run_setup()
+    elif args.command == "dashboard":
+        run_dashboard()
 
 
 if __name__ == "__main__":

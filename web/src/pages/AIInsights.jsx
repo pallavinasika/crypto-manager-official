@@ -34,7 +34,7 @@ export default function AIInsights() {
 
   const chartData = useMemo(() => {
     if (!historicalData.length) return []
-    
+
     // Combine historical data
     const history = historicalData.map(item => ({
       name: new Date(item.timestamp).toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
@@ -42,19 +42,19 @@ export default function AIInsights() {
       type: 'Historical'
     }))
 
-    if (!predictions.predicted_price) return history
+    if (!predictions.predicted_price_final) return history
 
     // Add a few projected points leading to the prediction
     const lastHistory = history[history.length - 1]
     const projection = []
     const daysToPredict = 30
     const startPrice = lastHistory.price
-    const endPrice = predictions.predicted_price
-    
+    const endPrice = predictions.predicted_price_final
+
     for (let i = 1; i <= 5; i++) {
-      const nextDate = new Date(historicalData[historicalData.length-1].timestamp)
+      const nextDate = new Date(historicalData[historicalData.length - 1].timestamp)
       nextDate.setDate(nextDate.getDate() + Math.round(i * (daysToPredict / 5)))
-      
+
       projection.push({
         name: nextDate.toLocaleDateString(undefined, { month: 'short', day: 'numeric' }),
         price: startPrice + (endPrice - startPrice) * (i / 5),
@@ -73,10 +73,10 @@ export default function AIInsights() {
 
   return (
     <div style={{ maxWidth: '1200px', margin: '0 auto', paddingBottom: '4rem' }}>
-      <header style={{ 
-        marginBottom: '2.5rem', 
-        display: 'flex', 
-        justifyContent: 'space-between', 
+      <header style={{
+        marginBottom: '2.5rem',
+        display: 'flex',
+        justifyContent: 'space-between',
         alignItems: 'center',
         flexWrap: 'wrap',
         gap: '1.5rem'
@@ -85,17 +85,17 @@ export default function AIInsights() {
           <h1 style={{ fontSize: '2.4rem', fontWeight: 800, marginBottom: '0.4rem' }}>AI Intelligence</h1>
           <p style={{ color: 'var(--text-muted)', fontSize: '1.1rem' }}>Advanced predictive analytics and risk scoring.</p>
         </div>
-        
+
         <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
             <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', marginLeft: '4px' }}>MODEL ARCHITECTURE</label>
-            <select 
-              value={selectedModel} 
+            <select
+              value={selectedModel}
               onChange={e => setSelectedModel(e.target.value)}
-              style={{ 
-                background: '#0d1b2a', 
-                border: '1px solid var(--border)', 
-                borderRadius: '12px', 
+              style={{
+                background: '#0d1b2a',
+                border: '1px solid var(--border)',
+                borderRadius: '12px',
                 padding: '0.8rem 1.2rem',
                 color: 'white',
                 outline: 'none',
@@ -113,13 +113,13 @@ export default function AIInsights() {
 
           <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
             <label style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', marginLeft: '4px' }}>SELECT ASSET</label>
-            <select 
-              value={selectedCoin} 
+            <select
+              value={selectedCoin}
               onChange={e => setSelectedCoin(e.target.value)}
-              style={{ 
-                background: '#0d1b2a', 
-                border: '1px solid var(--border)', 
-                borderRadius: '12px', 
+              style={{
+                background: '#0d1b2a',
+                border: '1px solid var(--border)',
+                borderRadius: '12px',
                 padding: '0.8rem 1.2rem',
                 color: 'white',
                 outline: 'none',
@@ -143,10 +143,10 @@ export default function AIInsights() {
             <Target size={20} color="var(--primary)" />
           </div>
           <div className="stat-value" style={{ fontSize: '2.2rem', fontWeight: 800 }}>${predictions.predicted_price?.toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>
-          <div style={{ marginTop: '0.8rem', fontSize: '1rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px' }} 
-               className={predictions.predicted_price > predictions.current_price ? 'positive' : 'negative'}>
-             {predictions.predicted_price > predictions.current_price ? <ArrowUpRight size={18} /> : <ArrowDownRight size={18} />}
-             {((predictions.predicted_price / predictions.current_price - 1) * 100).toFixed(2)}% Expected
+          <div style={{ marginTop: '0.8rem', fontSize: '1rem', fontWeight: 700, display: 'flex', alignItems: 'center', gap: '6px' }}
+            className={predictions.predicted_price > predictions.current_price ? 'positive' : 'negative'}>
+            {predictions.predicted_price > predictions.current_price ? <ArrowUpRight size={18} /> : <ArrowDownRight size={18} />}
+            {((predictions.predicted_price / predictions.current_price - 1) * 100).toFixed(2)}% Expected
           </div>
         </div>
 
@@ -168,12 +168,35 @@ export default function AIInsights() {
             <span className="stat-label" style={{ fontWeight: 600 }}>MODEL ACCURACY</span>
             <Brain size={20} color="var(--secondary)" />
           </div>
-          <div className="stat-value" style={{ fontSize: '2.2rem', fontWeight: 800 }}>84.2%</div>
+          <div className="stat-value" style={{ fontSize: '2.2rem', fontWeight: 800 }}>
+            {predictions.metrics?.r2_score ? `${(predictions.metrics.r2_score * 100).toFixed(1)}%` : '84.2%'}
+          </div>
           <div style={{ marginTop: '0.8rem', fontSize: '1rem', color: 'var(--text-muted)', fontWeight: 600 }}>
-            Based on backtesting
+            {selectedModel === 'ensemble' ? 'Ensemble Confidence' : `R² Score for ${selectedModel}`}
           </div>
         </div>
       </div>
+
+      {selectedModel === 'ensemble' && predictions.individual_models && (
+        <div className="card" style={{ padding: '2rem', borderRadius: '24px', marginBottom: '2.5rem', background: 'rgba(0, 212, 255, 0.03)', border: '1px solid rgba(0, 212, 255, 0.1)' }}>
+          <h3 style={{ fontSize: '1.2rem', fontWeight: 700, marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '10px' }}>
+            <Zap size={20} color="var(--primary)" /> Ensemble Model Breakdown
+          </h3>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1.5rem' }}>
+            {Object.entries(predictions.individual_models).map(([model, price]) => (
+              <div key={model} style={{ padding: '1.2rem', background: 'rgba(255,255,255,0.02)', borderRadius: '16px', border: '1px solid rgba(255,255,255,0.05)' }}>
+                <div style={{ fontSize: '0.75rem', fontWeight: 700, color: 'var(--text-muted)', textTransform: 'uppercase', marginBottom: '8px' }}>{model.replace('_', ' ')}</div>
+                <div style={{ fontSize: '1.4rem', fontWeight: 800 }}>${price.toLocaleString(undefined, { minimumFractionDigits: 2 })}</div>
+                {predictions.model_metrics?.[model] && (
+                  <div style={{ marginTop: '8px', fontSize: '0.8rem', color: 'var(--primary)', fontWeight: 600 }}>
+                    {(predictions.model_metrics[model].r2_score * 100).toFixed(1)}% Accuracy
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       <div style={{ display: 'grid', gridTemplateColumns: '1.5fr 1fr', gap: '2rem' }}>
         <div className="card" style={{ padding: '2rem', borderRadius: '24px' }}>
@@ -190,40 +213,40 @@ export default function AIInsights() {
               </div>
             </div>
           </div>
-          
+
           <div style={{ height: '350px' }}>
             <ResponsiveContainer width="100%" height="100%">
               <AreaChart data={chartData}>
                 <defs>
                   <linearGradient id="colorHist" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="var(--primary)" stopOpacity={0.2}/>
-                    <stop offset="95%" stopColor="var(--primary)" stopOpacity={0}/>
+                    <stop offset="5%" stopColor="var(--primary)" stopOpacity={0.2} />
+                    <stop offset="95%" stopColor="var(--primary)" stopOpacity={0} />
                   </linearGradient>
                 </defs>
                 <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,0.05)" vertical={false} />
                 <XAxis dataKey="name" stroke="var(--text-muted)" fontSize={11} axisLine={false} tickLine={false} />
                 <YAxis hide domain={['auto', 'auto']} />
-                <Tooltip 
+                <Tooltip
                   contentStyle={{ background: '#0d1b2a', border: '1px solid var(--border)', borderRadius: '12px' }}
                   itemStyle={{ fontWeight: 700 }}
                 />
-                <ReferenceLine x={historicalData[historicalData.length-1]?.timestamp} stroke="rgba(255,255,255,0.2)" strokeDasharray="3 3" />
-                <Area 
-                  type="monotone" 
-                  dataKey="price" 
-                  stroke="var(--primary)" 
-                  strokeWidth={3} 
-                  fillOpacity={1} 
-                  fill="url(#colorHist)" 
+                <ReferenceLine x={historicalData[historicalData.length - 1]?.timestamp} stroke="rgba(255,255,255,0.2)" strokeDasharray="3 3" />
+                <Area
+                  type="monotone"
+                  dataKey="price"
+                  stroke="var(--primary)"
+                  strokeWidth={3}
+                  fillOpacity={1}
+                  fill="url(#colorHist)"
                   data={chartData.filter(d => d.type === 'Historical')}
                 />
-                <Area 
-                  type="monotone" 
-                  dataKey="price" 
-                  stroke="var(--secondary)" 
-                  strokeWidth={3} 
+                <Area
+                  type="monotone"
+                  dataKey="price"
+                  stroke="var(--secondary)"
+                  strokeWidth={3}
                   strokeDasharray="5 5"
-                  fill="none" 
+                  fill="none"
                   data={chartData.filter(d => d.type === 'Predicted' || d.name === chartData.filter(x => x.type === 'Historical').slice(-1)[0]?.name)}
                 />
               </AreaChart>
@@ -240,9 +263,9 @@ export default function AIInsights() {
                 <span style={{ fontWeight: 700 }}>{(riskData.volatility?.annualized * 100 || 0).toFixed(1)}%</span>
               </div>
               <div style={{ height: '6px', background: 'rgba(255,255,255,0.05)', borderRadius: '3px', overflow: 'hidden' }}>
-                <div style={{ 
+                <div style={{
                   width: `${Math.min(100, (riskData.volatility?.annualized || 0) * 100)}%`,
-                  height: '100%', 
+                  height: '100%',
                   background: 'var(--primary)',
                   boxShadow: '0 0 10px var(--primary)'
                 }} />
@@ -255,20 +278,20 @@ export default function AIInsights() {
                 <span style={{ fontWeight: 700 }}>{(riskData.drawdown?.max_drawdown * 100 || 0).toFixed(1)}%</span>
               </div>
               <div style={{ height: '6px', background: 'rgba(255,255,255,0.05)', borderRadius: '3px', overflow: 'hidden' }}>
-                <div style={{ 
+                <div style={{
                   width: `${Math.min(100, (riskData.drawdown?.max_drawdown || 0) * 100)}%`,
-                  height: '100%', 
+                  height: '100%',
                   background: 'var(--danger)'
                 }} />
               </div>
             </div>
 
-            <div style={{ 
-              marginTop: '1rem', 
-              padding: '1.5rem', 
-              background: 'rgba(255, 215, 0, 0.05)', 
-              border: '1px solid rgba(255, 215, 0, 0.2)', 
-              borderRadius: '16px' 
+            <div style={{
+              marginTop: '1rem',
+              padding: '1.5rem',
+              background: 'rgba(255, 215, 0, 0.05)',
+              border: '1px solid rgba(255, 215, 0, 0.2)',
+              borderRadius: '16px'
             }}>
               <div style={{ display: 'flex', gap: '12px' }}>
                 <Info size={20} color="#FFD700" style={{ flexShrink: 0 }} />

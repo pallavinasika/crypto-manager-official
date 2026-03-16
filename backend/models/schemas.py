@@ -42,6 +42,7 @@ class User(BaseModel):
     email: EmailStr = Field(...)
     name: str = Field(...)
     hashed_password: str = Field(...)
+    role: str = Field(default="user")  # Possible roles: user, premium, admin
     created_at: datetime = Field(default_factory=datetime.utcnow)
 
     class Config:

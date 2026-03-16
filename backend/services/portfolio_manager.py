@@ -108,19 +108,57 @@ class PortfolioManager:
             return None
 
     async def add_asset(self, portfolio_id: str, coin_id: str, quantity: float, purchase_price: float) -> bool:
-        """Add an asset to a portfolio."""
+        """Add an asset to a portfolio, averaging into existing if found (DCA)."""
         db = get_database()
         try:
-            asset = {
-                "coin_id": coin_id,
-                "quantity": quantity,
-                "purchase_price": purchase_price,
-                "purchase_date": datetime.utcnow()
-            }
-            await db["portfolios"].update_one(
-                {"_id": ObjectId(portfolio_id)},
-                {"$push": {"assets": asset}, "$set": {"updated_at": datetime.utcnow()}}
-            )
+            # 1. Fetch current portfolio
+            portfolio = await db["portfolios"].find_one({"_id": ObjectId(portfolio_id)})
+            if not portfolio:
+                logger.error(f"Portfolio {portfolio_id} not found")
+                return False
+            
+            assets = portfolio.get("assets", [])
+            existing_idx = next((i for i, a in enumerate(assets) if a.get("coin_id") == coin_id), None)
+            
+            if existing_idx is not None:
+                # 2. Average with existing asset (DCA logic)
+                existing = assets[existing_idx]
+                old_qty = existing.get("quantity", 0)
+                old_price = existing.get("purchase_price", 0)
+                
+                new_total_qty = old_qty + quantity
+                if new_total_qty > 0:
+                    # Weighted average: (Q1*P1 + Q2*P2) / (Q1+Q2)
+                    new_avg_price = ((old_qty * old_price) + (quantity * purchase_price)) / new_total_qty
+                else:
+                    new_avg_price = purchase_price
+
+                # Replace item in list (Atomic update for the whole array for compatibility)
+                assets[existing_idx] = {
+                    "coin_id": coin_id,
+                    "quantity": new_total_qty,
+                    "purchase_price": new_avg_price,
+                    "purchase_date": datetime.utcnow()
+                }
+                
+                await db["portfolios"].update_one(
+                    {"_id": ObjectId(portfolio_id)},
+                    {"$set": {"assets": assets, "updated_at": datetime.utcnow()}}
+                )
+                logger.info(f"Averaged {coin_id} in portfolio {portfolio_id}: {new_total_qty} @ {new_avg_price}")
+            else:
+                # 3. Add as new asset
+                asset = {
+                    "coin_id": coin_id,
+                    "quantity": quantity,
+                    "purchase_price": purchase_price,
+                    "purchase_date": datetime.utcnow()
+                }
+                await db["portfolios"].update_one(
+                    {"_id": ObjectId(portfolio_id)},
+                    {"$push": {"assets": asset}, "$set": {"updated_at": datetime.utcnow()}}
+                )
+                logger.info(f"Added new asset {coin_id} to portfolio {portfolio_id}")
             return True
         except Exception as e:
             logger.error(f"Error adding asset to portfolio {portfolio_id}: {e}")

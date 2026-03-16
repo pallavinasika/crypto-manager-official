@@ -20,8 +20,15 @@ import bson
 from bson import ObjectId
 import asyncio
 import numpy as np
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.util import get_remote_address
+from slowapi.errors import RateLimitExceeded
 
-from config.settings import API_HOST, API_PORT, MAX_WORKERS, DEFAULT_CRYPTOS, SECRET_KEY, JWT_ALGORITHM, ACCESS_TOKEN_EXPIRE_MINUTES
+from config.settings import (
+    API_HOST, API_PORT, MAX_WORKERS,
+    DEFAULT_CRYPTOS, ML_CONFIG, SECRET_KEY,
+    REDIS_URL, ENABLE_REDIS, JWT_ALGORITHM, ACCESS_TOKEN_EXPIRE_MINUTES
+)
 from database.mongo_connection import connect_to_mongo, close_mongo_connection, get_database
 from backend.models.schemas import User, Portfolio, Transaction, PyObjectId
 from backend.services.data_collector import CryptoDataCollector, generate_sample_data
@@ -31,16 +38,21 @@ from backend.services.report_generator import ReportGenerator
 from ai_models.risk_analyzer import RiskAnalyzer
 from ai_models.predictor import CryptoPricePredictor
 from ai_models.investment_optimizer import InvestmentOptimizer
+from backend.services.backtesting_engine import BacktestingEngine
+from backend.services.exchange_service import ExchangeService
 from utils.helpers import logger
 from config.settings import REPORTS_DIR
 
-# Initialize FastAPI app
-print("🚀 STARTING SERVER with UPDATED CODE")
+# Initialize Limiter
+storage_uri = REDIS_URL if ENABLE_REDIS else "memory://"
+limiter = Limiter(key_func=get_remote_address, storage_uri=storage_uri)
 app = FastAPI(
     title="AI Crypto Investment Intelligence Platform",
     description="Advanced cryptocurrency analytics, predictions, and portfolio management",
     version="1.0.0",
 )
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
 # Ensure reports directory exists
 REPORTS_DIR.mkdir(parents=True, exist_ok=True)
@@ -76,13 +88,15 @@ async def disconnect(sid):
 PARAMESH_USER_ID = ObjectId("65e9b1e8a1d2c3b4e5f6a7b9")
 
 # Initialize services
-collector = CryptoDataCollector()
+collector = CryptoDataCollector(redis_url=REDIS_URL, enable_redis=ENABLE_REDIS)
 portfolio_mgr = PortfolioManager()
 risk_analyzer = RiskAnalyzer()
 predictor = CryptoPricePredictor()
 optimizer = InvestmentOptimizer()
 alert_system = AlertSystem()
 report_gen = ReportGenerator()
+backtester = BacktestingEngine(collector)
+exchange_svc = ExchangeService()
 
 class HoldingRequest(BaseModel):
     coin_id: str
@@ -170,6 +184,23 @@ async def get_current_user(request: Request) -> User:
             raise HTTPException(401, "Authentication failed")
     raise HTTPException(401, "Not authenticated")
 
+# Role-based access control
+class RoleChecker:
+    def __init__(self, allowed_roles: List[str]):
+        self.allowed_roles = allowed_roles
+
+    def __call__(self, user: User = Depends(get_current_user)):
+        if user.role not in self.allowed_roles:
+            raise HTTPException(
+                status_code=403, 
+                detail=f"Operation not permitted. Required roles: {self.allowed_roles}"
+            )
+        return user
+
+# Role dependencies
+allow_premium = RoleChecker(["premium", "admin"])
+allow_admin = RoleChecker(["admin"])
+
 class AlertRequest(BaseModel):
     coin_id: str = ""
     alert_type: str = "price_above"
@@ -182,28 +213,42 @@ class PortfolioCreate(BaseModel):
 # ============================================================
 # MARKET DATA ENDPOINTS
 # ============================================================
-@app.get("/api/market")
+@app.get("/api/market", summary="Get market data", description="Retrieve latest market data for top cryptocurrencies")
 async def get_market_data(per_page: int = 50):
-    data = await collector.get_latest_market_data(limit=per_page)
-    if not data:
-        data = await collector.fetch_and_store_market_data(per_page=per_page)
-    return {"status": "success", "data": sanitize_for_json(data or [])}
+    try:
+        data = await collector.get_latest_market_data(limit=per_page)
+        if not data:
+            data = await collector.fetch_and_store_market_data(per_page=per_page)
+        return {"status": "success", "data": sanitize_for_json(data or [])}
+    except Exception as e:
+        logger.error(f"Error fetching market data: {e}")
+        raise HTTPException(503, "Market data service temporarily unavailable")
 
-@app.get("/api/market/summary")
+@app.get("/api/market/summary", summary="Get market summary", description="Retrieve global market statistics (MCap, Volume, Sentiment)")
 async def get_market_summary():
     """Get global market stats for the dashboard header."""
-    data = await collector.get_market_summary()
-    return {"status": "success", "data": sanitize_for_json(data)}
+    try:
+        data = await collector.get_market_summary()
+        return {"status": "success", "data": sanitize_for_json(data)}
+    except Exception as e:
+        logger.error(f"Error fetching market summary: {e}")
+        raise HTTPException(503, "Market summary unavailable")
 
-@app.get("/api/market/{coin_id}")
+@app.get("/api/market/{coin_id}", summary="Get coin details", description="Retrieve detailed information for a specific cryptocurrency")
 async def get_coin_details(coin_id: str):
     data = collector.fetch_coin_details(coin_id)
     if data:
         return {"status": "success", "data": sanitize_for_json(data)}
-    raise HTTPException(404, f"Coin {coin_id} not found")
+    raise HTTPException(404, f"Cryptocurrency '{coin_id}' not found")
 
 def sanitize_for_json(obj):
-    """Recursively convert non-JSON compliant values (NaN, Inf, ObjectId, numpy types) to compliant ones."""
+    """
+    Recursively convert non-JSON compliant values to compliant ones.
+    Handles: NaN, Inf, ObjectId, numpy types, datetime, and Pydantic models.
+    """
+    if hasattr(obj, "dict") and callable(getattr(obj, "dict")):
+        return sanitize_for_json(obj.dict())
+    
     if isinstance(obj, dict):
         res = {}
         for k, v in obj.items():
@@ -231,76 +276,114 @@ def sanitize_for_json(obj):
         return obj.isoformat()
     elif str(type(obj)).find('ObjectId') >= 0:
         return str(obj)
-    return obj
+    elif obj is None:
+        return None
+    return str(obj) if not isinstance(obj, (int, str, bool)) else obj
 
-@app.get("/api/market/{coin_id}/history")
-async def get_price_history(coin_id: str, days: int = 365):
+@app.get("/api/market/{coin_id}/history", summary="Get price history", description="Retrieve historical price data for a specific coin over N days")
+async def get_price_history(coin_id: str, days: int = Query(365, ge=1, le=2000)):
     try:
         df = await collector.get_price_history_from_db(coin_id, days=days)
         if df.empty:
+            logger.info(f"Cache miss for {coin_id} history, fetching from API...")
             df = await collector.fetch_historical_prices(coin_id, days=days)
-            if df is not None:
+            if df is not None and not df.empty:
                 await collector.save_price_history_to_db(coin_id, df)
-                return {"status": "success", "data": sanitize_for_json(df.to_dict(orient="records"))}
+            else:
+                raise HTTPException(404, f"Historical data for {coin_id} not available")
         
         return {"status": "success", "data": sanitize_for_json(df.to_dict(orient="records"))}
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Error in get_price_history: {e}", exc_info=True)
-        raise HTTPException(500, str(e))
+        logger.error(f"Error in get_price_history for {coin_id}: {e}", exc_info=True)
+        raise HTTPException(500, "Internal server error while processing history data")
 
 # ============================================================
 # AUTH ENDPOINTS
 # ============================================================
-@app.post("/api/auth/register")
-async def register(req: RegisterRequest):
-    db = get_database()
-    existing = await db["users"].find_one({"email": req.email})
-    if existing:
-        raise HTTPException(400, "Email already registered")
-    
-    hpw = hash_password(req.password)
-    name = req.name or (req.email.split("@")[0] if "@" in req.email else req.email)
-    new_user = {"email": req.email, "name": name, "hashed_password": hpw, "created_at": datetime.utcnow()}
-    result = await db["users"].insert_one(new_user)
-    return {"status": "success", "data": {"id": str(result.inserted_id), "email": req.email, "name": name}}
+@app.post("/api/auth/register", summary="Register a new user")
+@limiter.limit("5/minute")
+async def register(request: Request, req: RegisterRequest):
+    try:
+        db = get_database()
+        existing = await db["users"].find_one({"email": req.email})
+        if existing:
+            raise HTTPException(400, "Email already registered")
+        
+        hpw = hash_password(req.password)
+        name = req.name or (req.email.split("@")[0] if "@" in req.email else req.email)
+        new_user = {
+            "email": req.email, 
+            "name": name, 
+            "hashed_password": hpw, 
+            "created_at": datetime.utcnow()
+        }
+        result = await db["users"].insert_one(new_user)
+        return {"status": "success", "data": {"id": str(result.inserted_id), "email": req.email, "name": name}}
+    except Exception as e:
+        if isinstance(e, HTTPException): raise e
+        logger.error(f"Registration error: {e}")
+        raise HTTPException(500, "Failed to register user")
 
-@app.post("/api/auth/login", response_model=LoginResponse)
-async def login(req: LoginRequest):
-    print(f"Login request received for email: {req.email}")
-    db = get_database()
-    user_data = await db["users"].find_one({"email": req.email})
-    if not user_data or not verify_password(req.password, user_data["hashed_password"]):
-        raise HTTPException(401, "Invalid credentials")
-    token = create_access_token({"sub": str(user_data["_id"]), "email": user_data["email"]})
-    return LoginResponse(access_token=token, user=UserResponse(id=str(user_data["_id"]), email=user_data["email"], name=user_data["name"]))
+@app.post("/api/auth/login", response_model=LoginResponse, summary="User login")
+@limiter.limit("10/minute")
+async def login(request: Request, req: LoginRequest):
+    try:
+        db = get_database()
+        user_data = await db["users"].find_one({"email": req.email})
+        if not user_data or not verify_password(req.password, user_data["hashed_password"]):
+            raise HTTPException(401, "Invalid email or password")
+            
+        token = create_access_token({"sub": str(user_data["_id"]), "email": user_data["email"]})
+        return LoginResponse(
+            access_token=token, 
+            user=UserResponse(
+                id=str(user_data["_id"]), 
+                email=user_data["email"], 
+                name=user_data["name"]
+            )
+        )
+    except Exception as e:
+        if isinstance(e, HTTPException): raise e
+        logger.error(f"Login error: {e}")
+        raise HTTPException(500, "Internal server error during login")
 
-@app.get("/api/auth/me", response_model=UserResponse)
-async def me(current_user: User = Depends(get_current_user)):
+@app.get("/api/auth/me", response_model=UserResponse, summary="Get current user")
+@limiter.limit("30/minute")
+async def me(request: Request, current_user: User = Depends(get_current_user)):
     return UserResponse(id=str(current_user.id), email=current_user.email, name=current_user.name)
 
 # ============================================================
 # PORTFOLIO ENDPOINTS
 # ============================================================
-@app.post("/api/portfolio")
+@app.post("/api/portfolio", summary="Create portfolio")
 async def create_portfolio(req: PortfolioCreate, current_user: User = Depends(get_current_user)):
     pid = await portfolio_mgr.create_portfolio(str(current_user.id), req.name, req.description)
+    if not pid:
+        raise HTTPException(500, "Failed to create portfolio")
     return {"status": "success", "portfolio_id": pid}
 
-@app.get("/api/portfolios")
+@app.get("/api/portfolios", summary="List all portfolios")
 async def list_portfolios(current_user: User = Depends(get_current_user)):
     data = await portfolio_mgr.list_portfolios(str(current_user.id))
     return {"status": "success", "data": sanitize_for_json(data)}
 
-@app.get("/api/portfolio/{portfolio_id}")
+@app.get("/api/portfolio/{portfolio_id}", summary="Get portfolio details")
 async def get_portfolio(portfolio_id: str, current_user: User = Depends(get_current_user)):
     portfolio = await portfolio_mgr.get_portfolio(portfolio_id)
+    if not portfolio:
+        raise HTTPException(404, "Portfolio not found")
     return {"status": "success", "data": sanitize_for_json(portfolio)}
 
-@app.post("/api/portfolio/sample")
+@app.post("/api/portfolio/sample", summary="Create demo portfolio")
 async def create_sample_portfolio(current_user: User = Depends(get_current_user)):
     """Create a sample portfolio with demo data."""
     pid = await portfolio_mgr.create_portfolio(str(current_user.id), "Demo Portfolio", "Automatically generated sample assets")
     
+    if not pid:
+        raise HTTPException(500, "Failed to create sample portfolio")
+
     # Add some sample assets
     samples = [
         {"coin_id": "bitcoin", "qty": 0.5, "price": 45000},
@@ -313,12 +396,14 @@ async def create_sample_portfolio(current_user: User = Depends(get_current_user)
         
     return {"status": "success", "portfolio_id": pid}
 
-@app.post("/api/portfolio/{portfolio_id}/holding")
+@app.post("/api/portfolio/{portfolio_id}/holding", summary="Add asset to portfolio")
 async def add_holding(portfolio_id: str, req: HoldingRequest, current_user: User = Depends(get_current_user)):
-    await portfolio_mgr.add_asset(portfolio_id, req.coin_id, req.quantity, req.purchase_price)
+    success = await portfolio_mgr.add_asset(portfolio_id, req.coin_id, req.quantity, req.purchase_price)
+    if not success:
+        raise HTTPException(500, "Failed to add asset to portfolio")
     return {"status": "success"}
 
-@app.delete("/api/portfolio/{portfolio_id}/holding/{coin_id}")
+@app.delete("/api/portfolio/{portfolio_id}/holding/{coin_id}", summary="Remove asset from portfolio")
 async def remove_holding(portfolio_id: str, coin_id: str, current_user: User = Depends(get_current_user)):
     success = await portfolio_mgr.remove_asset(portfolio_id, coin_id)
     if success:
@@ -328,240 +413,321 @@ async def remove_holding(portfolio_id: str, coin_id: str, current_user: User = D
 # ============================================================
 # ALERT ENDPOINTS
 # ============================================================
-@app.post("/api/alerts")
+@app.post("/api/alerts", summary="Create price alert")
 async def create_alert(req: AlertRequest, current_user: User = Depends(get_current_user)):
-    alert_id = await alert_system.create_price_alert(
-        str(current_user.id), 
-        req.coin_id, 
-        req.alert_type, 
-        req.threshold
-    )
-    if alert_id:
-        return {"status": "success", "alert_id": alert_id}
-    raise HTTPException(500, "Failed to create alert")
+    try:
+        user_id_str = str(current_user.id)
+        alert_id = await alert_system.create_price_alert(
+            user_id_str, 
+            req.coin_id, 
+            req.alert_type, 
+            req.threshold
+        )
+        if alert_id:
+            return {"status": "success", "alert_id": str(alert_id)}
+        raise HTTPException(500, "Failed to create alert")
+    except Exception as e:
+        if isinstance(e, HTTPException): raise e
+        logger.error(f"Error creating alert: {e}")
+        raise HTTPException(500, "Internal server error while creating alert")
 
-@app.get("/api/alerts")
+@app.get("/api/alerts", summary="List user alerts")
 async def list_alerts(current_user: User = Depends(get_current_user)):
-    db = get_database()
-    alerts = await db["alerts"].find({"user_id": ObjectId(current_user.id)}).to_list(length=100)
-    return {"status": "success", "data": sanitize_for_json(alerts)}
+    try:
+        db = get_database()
+        user_id_str = str(current_user.id)
+        # Try both ObjectId and string representations just in case
+        query = {"$or": [{"user_id": user_id_str}]}
+        if len(user_id_str) == 24:
+            query["$or"].append({"user_id": ObjectId(user_id_str)})
+            
+        alerts = await db["alerts"].find(query).to_list(length=100)
+        return {"status": "success", "data": sanitize_for_json(alerts)}
+    except Exception as e:
+        logger.error(f"Error listing alerts: {e}")
+        raise HTTPException(500, "Failed to retrieve alerts")
 
-@app.delete("/api/alerts/{alert_id}")
+@app.delete("/api/alerts/{alert_id}", summary="Delete alert")
 async def delete_alert(alert_id: str, current_user: User = Depends(get_current_user)):
-    db = get_database()
-    result = await db["alerts"].delete_one({"_id": ObjectId(alert_id), "user_id": ObjectId(current_user.id)})
-    if result.deleted_count:
-        return {"status": "success"}
-    raise HTTPException(404, "Alert not found")
+    try:
+        db = get_database()
+        user_id_str = str(current_user.id)
+        query = {"_id": ObjectId(alert_id), "$or": [{"user_id": user_id_str}]}
+        if len(user_id_str) == 24:
+            query["$or"].append({"user_id": ObjectId(user_id_str)})
+            
+        result = await db["alerts"].delete_one(query)
+        if result.deleted_count:
+            return {"status": "success"}
+        raise HTTPException(404, "Alert not found")
+    except Exception as e:
+        if isinstance(e, HTTPException): raise e
+        logger.error(f"Error deleting alert: {e}")
+        raise HTTPException(500, "Failed to delete alert")
 
 # ============================================================
 # AI & RISK ENDPOINTS
 # ============================================================
-@app.get("/api/risk/{coin_id}")
+@app.get("/api/risk/{coin_id}", summary="Analyze asset risk")
 async def analyze_risk(coin_id: str, days: int = 365):
     try:
         df = await collector.get_price_history_from_db(coin_id, days=days)
-        if get_database().is_mock:
-            db = get_database()
-            result = await db["risk_analysis"].find_one({"coin_id": coin_id})
-            return {"status": "success", "data": sanitize_for_json(result)}
+        if df.empty:
+            df = await collector.fetch_historical_prices(coin_id, days=days)
+            
+        if df.empty:
+            raise HTTPException(404, f"No historical data for {coin_id}")
+            
+        result = risk_analyzer.analyze_asset_risk(df["price"], coin_id)
+        return {"status": "success", "data": sanitize_for_json(result)}
 
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Error in analyze_risk: {e}", exc_info=True)
-        raise HTTPException(500, str(e))
+        logger.error(f"Error in analyze_risk for {coin_id}: {e}", exc_info=True)
+        raise HTTPException(500, "Failed to analyze risk")
 
-@app.get("/api/predict/{coin_id}")
-async def predict_price(coin_id: str, days: int = 30, model: str = "random_forest"):
+@app.get("/api/predict/{coin_id}", summary="Predict future price")
+@limiter.limit("20/minute")
+async def predict_price(request: Request, coin_id: str, days: int = Query(7, ge=1, le=30), model: str = Query("random_forest"), current_user: User = Depends(allow_premium)):
     try:
         df = await collector.get_price_history_from_db(coin_id, days=365)
         if df.empty:
+            df = await collector.fetch_historical_prices(coin_id, days=365)
+            
+        if df.empty:
             raise HTTPException(404, "No historical data found for prediction")
         
-        if get_database().is_mock:
-            db = get_database()
-            result = await db["predictions"].find_one({"coin_id": coin_id, "model": model})
-            return {"status": "success", "data": sanitize_for_json(result)}
+        # Route based on model type
+        if model == "ensemble":
+            result = predictor.ensemble_predict(df, coin_id, days_ahead=days)
+        else:
+            result = predictor.predict_future_prices(df, coin_id, model_type=model, days_ahead=days)
+            
+        # Ensure 'predicted_price' exists for frontend compatibility
+        if "predicted_price_final" in result and "predicted_price" not in result:
+            result["predicted_price"] = result["predicted_price_final"]
+            
+        return {"status": "success", "data": sanitize_for_json(result)}
 
+    except HTTPException:
+        raise
     except Exception as e:
-        logger.error(f"Error in predict_price: {e}", exc_info=True)
-        raise HTTPException(500, str(e))
+        logger.error(f"Error in predict_price for {coin_id}: {e}", exc_info=True)
+        raise HTTPException(500, "Failed to generate prediction")
 
 # ============================================================
 # OPTIMIZATION ENDPOINTS
 # ============================================================
-@app.get("/api/optimize")
+@app.get("/api/optimize", summary="Optimize portfolio (Scipy)")
 async def optimize_portfolio_endpoint(
-    objective: str = "max_sharpe",
+    objective: str = Query("max_sharpe", enum=["max_sharpe", "min_volatility"]),
     current_user: User = Depends(get_current_user)
 ):
-    """Optimize portfolio using Scipy minimization."""
-    # Get user's current portfolio assets
-    portfolios = await portfolio_mgr.list_portfolios(str(current_user.id))
-    if not portfolios:
-        raise HTTPException(404, "No portfolio found to optimize")
-    
-    portfolio = await portfolio_mgr.get_portfolio(portfolios[0]["id"])
-    if not portfolio.get("assets") or len(portfolio["assets"]) < 2:
-        raise HTTPException(400, "Need at least 2 assets to optimize")
-    
-    # Get price data for these assets
-    price_data = {}
-    for asset in portfolio["assets"]:
-        coin_id = asset["coin_id"]
-        df = await collector.get_price_history_from_db(coin_id, days=365)
-        if not df.empty:
-            price_data[coin_id] = df["price"]
-    
-    if len(price_data) < 2:
-        raise HTTPException(400, "Insufficient historical data for optimization")
-    
-    result = optimizer.optimize_portfolio(price_data, objective=objective)
-    if "error" in result:
-        raise HTTPException(400, result["error"])
+    """Optimize portfolio weights using standard optimization algorithms."""
+    try:
+        portfolios = await portfolio_mgr.list_portfolios(str(current_user.id))
+        if not portfolios:
+            raise HTTPException(404, "No portfolio found to optimize")
         
-    return {"status": "success", "data": sanitize_for_json(result)}
-
-@app.get("/api/optimize/monte-carlo")
-async def monte_carlo_optimization_endpoint(
-    num_portfolios: int = 5000,
-    current_user: User = Depends(get_current_user)
-):
-    """Optimize portfolio using Monte Carlo simulation."""
-    portfolios = await portfolio_mgr.list_portfolios(str(current_user.id))
-    if not portfolios:
-        raise HTTPException(404, "No portfolio found to optimize")
-    
-    portfolio = await portfolio_mgr.get_portfolio(portfolios[0]["id"])
-    if not portfolio.get("assets") or len(portfolio["assets"]) < 2:
-        raise HTTPException(400, "Need at least 2 assets to optimize")
-    
-    price_data = {}
-    for asset in portfolio["assets"]:
-        coin_id = asset["coin_id"]
-        df = await collector.get_price_history_from_db(coin_id, days=365)
-        if not df.empty:
-            price_data[coin_id] = df["price"]
+        portfolio = await portfolio_mgr.get_portfolio(portfolios[0]["id"])
+        if not portfolio.get("assets") or len(portfolio["assets"]) < 2:
+            raise HTTPException(400, "Need at least 2 assets in your portfolio to perform optimization")
+        
+        price_data = {}
+        for asset in portfolio["assets"]:
+            coin_id = asset["coin_id"]
+            df = await collector.get_price_history_from_db(coin_id, days=365)
+            if not df.empty:
+                price_data[coin_id] = df["price"]
+        
+        if len(price_data) < 2:
+            raise HTTPException(400, "Insufficient historical data for assets to perform optimization")
+        
+        result = optimizer.optimize_portfolio(price_data, objective=objective)
+        if "error" in result:
+            raise HTTPException(400, result["error"])
             
-    if len(price_data) < 2:
-        raise HTTPException(400, "Insufficient historical data for optimization")
-    
-    result = optimizer.monte_carlo_optimization(price_data, num_portfolios=num_portfolios)
-    if "error" in result:
-        raise HTTPException(400, result["error"])
+        return {"status": "success", "data": sanitize_for_json(result)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Optimization error: {e}")
+        raise HTTPException(500, "Failed to optimize portfolio")
+
+@app.get("/api/optimize/monte-carlo", summary="Optimize portfolio (Monte Carlo)")
+async def monte_carlo_optimization_endpoint(
+    num_portfolios: int = Query(5000, ge=1000, le=20000),
+    current_user: User = Depends(get_current_user)
+):
+    """Optimize portfolio weights using Monte Carlo simulation."""
+    try:
+        portfolios = await portfolio_mgr.list_portfolios(str(current_user.id))
+        if not portfolios:
+            raise HTTPException(404, "No portfolio found to optimize")
         
-    return {"status": "success", "data": sanitize_for_json(result)}
+        portfolio = await portfolio_mgr.get_portfolio(portfolios[0]["id"])
+        if not portfolio.get("assets") or len(portfolio["assets"]) < 2:
+            raise HTTPException(400, "Need at least 2 assets for Monte Carlo optimization")
+        
+        price_data = {}
+        for asset in portfolio["assets"]:
+            coin_id = asset["coin_id"]
+            df = await collector.get_price_history_from_db(coin_id, days=365)
+            if not df.empty:
+                price_data[coin_id] = df["price"]
+                
+        if len(price_data) < 2:
+            raise HTTPException(400, "Insufficient historical data for assets")
+        
+        result = optimizer.monte_carlo_optimization(price_data, num_portfolios=num_portfolios)
+        if "error" in result:
+            raise HTTPException(400, result["error"])
+            
+        return {"status": "success", "data": sanitize_for_json(result)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Monte Carlo optimization error: {e}")
+        raise HTTPException(500, "Failed to run Monte Carlo simulation")
 
 # ============================================================
 # REPORT ENDPOINTS
 # ============================================================
-@app.get("/api/report/portfolio/{portfolio_id}")
+@app.get("/api/report/portfolio/{portfolio_id}", summary="Generate portfolio report")
 async def get_portfolio_report(
     portfolio_id: str,
     current_user: User = Depends(get_current_user)
 ):
-    """Generate and return a portfolio report."""
-    portfolio = await portfolio_mgr.get_portfolio(portfolio_id)
-    if not portfolio:
-        raise HTTPException(404, "Portfolio not found")
-        
-    # Gather additional context for report
-    risk_results = {}
-    prediction_results = {}
-    
-    for asset in portfolio.get("assets", []):
-        coin_id = asset["coin_id"]
-        df = await collector.get_price_history_from_db(coin_id, days=365)
-        if not df.empty:
-            risk_results[coin_id] = risk_analyzer.analyze_asset_risk(df["price"], coin_id)
-            prediction_results[coin_id] = predictor.predict_future_prices(df, coin_id, "random_forest", 14)
+    """Generate and return a detailed PDF/CSV portfolio report."""
+    try:
+        portfolio = await portfolio_mgr.get_portfolio(portfolio_id)
+        if not portfolio:
+            raise HTTPException(404, "Portfolio not found")
             
-    report = report_gen.generate_portfolio_report(portfolio, risk_results, prediction_results)
-    return {"status": "success", "data": sanitize_for_json(report)}
+        risk_results = {}
+        prediction_results = {}
+        
+        for asset in portfolio.get("assets", []):
+            coin_id = asset["coin_id"]
+            df = await collector.get_price_history_from_db(coin_id, days=365)
+            if not df.empty:
+                risk_results[coin_id] = risk_analyzer.analyze_asset_risk(df["price"], coin_id)
+                prediction_results[coin_id] = predictor.predict_future_prices(df, coin_id, "random_forest", 14)
+                
+        report = report_gen.generate_portfolio_report(portfolio, risk_results, prediction_results)
+        return {"status": "success", "data": sanitize_for_json(report)}
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Report generation error: {e}")
+        raise HTTPException(500, "Failed to generate portfolio report")
 
-@app.get("/api/report/market")
+@app.get("/api/report/market", summary="Generate market report")
 async def get_market_report(current_user: User = Depends(get_current_user)):
-    """Generate and return a market report."""
-    market_data = await collector.get_latest_market_data(limit=50)
-    if not market_data:
-        market_data = await collector.fetch_and_store_market_data(per_page=50)
-        
-    # For a full report, we'd want risk analysis for top coins
-    # but that's slow, so we'll just do it for top 5
-    risk_analyses = {}
-    for coin in market_data[:5]:
-        coin_id = coin["coin_id"]
-        df = await collector.get_price_history_from_db(coin_id, days=365)
-        if not df.empty:
-            risk_analyses[coin_id] = risk_analyzer.analyze_asset_risk(df["price"], coin_id)
+    """Generate and return a detailed market overview report."""
+    try:
+        market_data = await collector.get_latest_market_data(limit=50)
+        if not market_data:
+            market_data = await collector.fetch_and_store_market_data(per_page=50)
             
-    report = report_gen.generate_market_report(market_data, risk_analyses)
-    return {"status": "success", "data": sanitize_for_json(report)}
+        risk_analyses = {}
+        for coin in market_data[:5]:
+            coin_id = coin["coin_id"]
+            df = await collector.get_price_history_from_db(coin_id, days=365)
+            if not df.empty:
+                risk_analyses[coin_id] = risk_analyzer.analyze_asset_risk(df["price"], coin_id)
+                
+        report = report_gen.generate_market_report(market_data, risk_analyses)
+        return {"status": "success", "data": sanitize_for_json(report)}
+    except Exception as e:
+        logger.error(f"Market report error: {e}")
+        raise HTTPException(500, "Failed to generate market report")
 
-@app.post("/api/ai/chat")
-async def ai_chat(req: ChatRequest, current_user: User = Depends(get_current_user)):
+@app.post("/api/ai/chat", summary="AI Chatbot", description="Interact with the learning AI assistant for market insights and portfolio advice")
+@limiter.limit("10/minute")
+async def ai_chat(request: Request, req: ChatRequest, current_user: User = Depends(allow_premium)):
     """AI Chatbot endpoint with long-term memory learning."""
-    msg = req.message.lower()
-    db = get_database()
-    
-    # 1. Retrieve Past Memory for this User
-    past_interactions = await db["chat_memory"].find({"user_id": ObjectId(current_user.id)}).sort("timestamp", -1).to_list(length=5)
-    memory_context = [m['message'] for m in past_interactions]
-    
-    # 2. Market and Portfolio Data
-    market_data = await db["market_data"].find().to_list(length=20)
-    user_portfolios = await portfolio_mgr.list_portfolios(str(current_user.id))
-    
-    response = ""
-    learning_note = ""
-    
-    # Check if user is repeating a topic (Simple Learning)
-    if any(kw in msg for kw in ["bitcoin", "btc"]) and any("bitcoin" in prev or "btc" in prev for prev in memory_context):
-        learning_note = "As we discussed earlier, "
-    elif any(kw in msg for kw in ["portfolio", "holdings"]) and any("portfolio" in prev or "holdings" in prev for prev in memory_context):
-        learning_note = "Following up on your portfolio interest, "
+    try:
+        msg = req.message.lower()
+        db = get_database()
+        
+        # 1. Retrieve Past Memory for this User
+        past_interactions = await db["chat_memory"].find({"user_id": ObjectId(current_user.id)}).sort("timestamp", -1).to_list(length=5)
+        memory_context = [m['message'] for m in past_interactions]
+        
+        # 2. Market and Portfolio Data
+        market_data = await db["market_data"].find().to_list(length=20)
+        user_portfolios = await portfolio_mgr.list_portfolios(str(current_user.id))
+        
+        response = ""
+        learning_note = ""
+        
+        # Check if user is repeating a topic (Simple Learning)
+        if any(kw in msg for kw in ["bitcoin", "btc"]) and any("bitcoin" in prev or "btc" in prev for prev in memory_context):
+            learning_note = "As we discussed earlier, "
+        elif any(kw in msg for kw in ["portfolio", "holdings"]) and any("portfolio" in prev or "holdings" in prev for prev in memory_context):
+            learning_note = "Following up on your portfolio interest, "
 
-    # 3. Response Generation Logic
-    if "price" in msg or "market" in msg:
-        top_coins = [f"{c['coin_id'].capitalize()}: ${c['price']:,.2f}" for c in market_data[:3]]
-        response = f"{learning_note}The current market snapshot is: " + ", ".join(top_coins) + "."
-    
-    elif "volatility" in msg or "movers" in msg or "gainers" in msg:
-        gainers = sorted(market_data, key=lambda x: x.get('change_24h', 0), reverse=True)[:3]
-        response = f"{learning_note}The top 24h gainers are: " + ", ".join([f"{c['coin_id'].capitalize()} (+{c.get('change_24h', 0):.2f}%)" for c in gainers])
-    
-    elif "volume" in msg:
-        volume_leaders = sorted(market_data, key=lambda x: x.get('total_volume', 0), reverse=True)[:3]
-        response = f"The highest volume assets today are: " + ", ".join([f"{c['coin_id'].capitalize()} (${c.get('total_volume', 0)/1e9:.1f}B)" for c in volume_leaders])
-    
-    elif "sentiment" in msg or "bull" in msg or "bear" in msg:
-        avg_change = sum([c.get('change_24h', 0) for c in market_data[:10]]) / 10
-        sentiment = "Bullish" if avg_change > 1 else "Bearish" if avg_change < -1 else "Neutral"
-        response = f"Market sentiment is {sentiment} ({avg_change:+.2f}% avg). Traders are currently {'optimistic' if sentiment == 'Bullish' else 'cautious'}."
+        # 3. Response Generation Logic
+        if "price" in msg or "market" in msg:
+            top_coins = [f"{c['coin_id'].capitalize()}: ${c.get('price', 0):,.2f}" for c in market_data[:3]]
+            response = f"{learning_note}The current market snapshot is: " + ", ".join(top_coins) + "."
+        
+        elif "volatility" in msg or "movers" in msg or "gainers" in msg:
+            gainers = sorted(market_data, key=lambda x: x.get('change_24h') or 0, reverse=True)[:3]
+            response = f"{learning_note}The top 24h gainers are: " + ", ".join([f"{c.get('coin_id', '').capitalize()} (+{c.get('change_24h') or 0:.2f}%)" for c in gainers])
+        
+        elif "volume" in msg:
+            volume_leaders = sorted(market_data, key=lambda x: x.get('total_volume') or 0, reverse=True)[:3]
+            response = f"The highest volume assets today are: " + ", ".join([f"{c.get('coin_id', '').capitalize()} (${(c.get('total_volume') or 0)/1e9:.1f}B)" for c in volume_leaders])
+        
+        elif "sentiment" in msg or "bull" in msg or "bear" in msg:
+            if market_data:
+                avg_change = sum([c.get('change_24h') or 0 for c in market_data[:10]]) / min(len(market_data), 10)
+                sentiment = "Bullish" if avg_change > 1 else "Bearish" if avg_change < -1 else "Neutral"
+                response = f"Market sentiment is {sentiment} ({avg_change:+.2f}% avg). Traders are currently {'optimistic' if sentiment == 'Bullish' else 'cautious'}."
+            else:
+                response = "I don't have enough market data to determine sentiment right now."
 
-    elif "portfolio" in msg or "holdings" in msg or "risk" in msg:
-        if user_portfolios:
-            p = user_portfolios[0]
-            risk_summary = "low" if p['total_pl_pct'] > -5 else "moderate" if p['total_pl_pct'] > -15 else "high"
-            response = f"{learning_note}Your portfolio '{p['name']}' is valued at ${p['total_value']:,.2f} with a {risk_summary} risk level."
+        elif "portfolio" in msg or "holdings" in msg or "risk" in msg:
+            if user_portfolios:
+                p = user_portfolios[0]
+                risk_val = p.get('total_pl_pct', 0) if p.get('total_pl_pct') is not None else 0
+                risk_summary = "low" if risk_val > -5 else "moderate" if risk_val > -15 else "high"
+                total_val = p.get('total_value', 0) if p.get('total_value') is not None else 0
+                response = f"{learning_note}Your portfolio '{p.get('name', 'Main')}' is valued at ${total_val:,.2f} with a {risk_summary} risk level."
+            else:
+                response = "You don't have a portfolio yet. Let's create one to start tracking!"
+                
+        elif "bitcoin" in msg or "btc" in msg:
+            btc = next((c for c in market_data if c.get('coin_id') == 'bitcoin'), None)
+            if btc:
+                response = f"{learning_note}Bitcoin is trading at ${btc.get('price', 0):,.2f}. Models show support at ${btc.get('price', 0)*0.95:,.2f}."
+            else:
+                response = "Bitcoin data is currently unavailable."
         else:
-            response = "You don't have a portfolio yet. Let's create one to start tracking!"
-            
-    elif "bitcoin" in msg or "btc" in msg:
-        btc = next((c for c in market_data if c['coin_id'] == 'bitcoin'), None)
-        if btc:
-            response = f"{learning_note}Bitcoin is trading at ${btc['price']:,.2f}. Models show support at ${btc['price']*0.95:,.2f}."
-    else:
-        response = "I'm your learning AI Assistant. Ask me about prices, gainers, market volume, sentiment, or your portfolio!"
+            response = "I'm your learning AI Assistant. Ask me about prices, gainers, market volume, sentiment, or your portfolio!"
 
-    # 4. Store this interaction in Long-Term Memory
-    await db["chat_memory"].insert_one({
-        "user_id": ObjectId(current_user.id),
-        "message": msg,
-        "response": response,
-        "timestamp": datetime.utcnow()
-    })
+        # 4. Store this interaction in Long-Term Memory
+        try:
+            user_id_val = str(current_user.id)
+            if len(user_id_val) == 24:
+                user_id_val = ObjectId(user_id_val)
+                
+            await db["chat_memory"].insert_one({
+                "user_id": user_id_val,
+                "message": msg,
+                "response": response,
+                "timestamp": datetime.utcnow()
+            })
+        except Exception as err:
+            logger.warning(f"Could not save chat memory: {err}")
 
-    return {"status": "success", "response": response}
+        return {"status": "success", "response": response}
+    except Exception as e:
+        logger.error(f"AI Chat error: {e}")
+        raise HTTPException(500, "AI Chat service is currently unavailable")
 
 # Background task for real-time updates
 async def market_update_task():
@@ -582,10 +748,52 @@ async def market_update_task():
             print(f"Error in market update task: {e}")
         await asyncio.sleep(60)
 
-@app.get("/api/ping")
+@app.get("/api/ping", summary="Ping server")
 async def ping():
-    from database.mongo_connection import db as db_obj
     return {"status": "ok", "timestamp": datetime.utcnow(), "db_mock": get_database().is_mock}
+
+@app.post("/api/exchange/sync", summary="Sync with exchange API")
+async def sync_exchange(exchange_id: str, api_keys: Dict, current_user: User = Depends(allow_premium)):
+    try:
+        # Update exchange service with keys (in real life, store securely in DB)
+        exchange_svc.api_keys[exchange_id] = api_keys
+        balances = await exchange_svc.fetch_exchange_balances(exchange_id)
+        return {"status": "success", "data": balances}
+    except Exception as e:
+        logger.error(f"Exchange sync error: {e}")
+        raise HTTPException(500, f"Failed to sync with exchange: {str(e)}")
+
+# ============================================================
+# PHASE 4: ADVANCED PORTFOLIO ENDPOINTS
+# ============================================================
+@app.get("/api/portfolio/backtest", summary="Run portfolio backtest")
+async def run_backtest(coin_id: str, initial_capital: float = 10000.0, days: int = 365, strategy: str = "buy_and_hold", current_user: User = Depends(allow_premium)):
+    try:
+        result = await backtester.run_backtest(coin_id, initial_capital, days, strategy)
+        return {"status": "success", "data": result}
+    except Exception as e:
+        logger.error(f"Backtest error: {e}")
+        raise HTTPException(500, "Failed to run backtest")
+
+@app.get("/api/portfolio/tax-report", summary="Generate tax report")
+async def get_tax_report(current_user: User = Depends(get_current_user)):
+    try:
+        db = get_database()
+        user_id_str = str(current_user.id)
+        query = {"$or": [{"user_id": user_id_str}]}
+        if len(user_id_str) == 24:
+            query["$or"].append({"user_id": ObjectId(user_id_str)})
+            
+        portfolio = await db["portfolios"].find_one(query)
+        if not portfolio or "assets" not in portfolio:
+            raise HTTPException(404, "No portfolio found for tax reporting")
+            
+        report = report_gen.generate_tax_report(portfolio["assets"])
+        return {"status": "success", "data": report}
+    except Exception as e:
+        if isinstance(e, HTTPException): raise e
+        logger.error(f"Tax report error: {e}")
+        raise HTTPException(500, "Failed to generate tax report")
 
 async def seed_initial_data():
     """Seed initial demo data for offline storage."""

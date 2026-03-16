@@ -5,6 +5,10 @@ Contains API settings, database configuration, and application constants.
 
 import os
 from pathlib import Path
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
 
 # ============================================================
 # PROJECT PATHS
@@ -24,8 +28,10 @@ for d in [DATA_DIR, MODELS_DIR, DATABASE_DIR, REPORTS_DIR]:
 # ============================================================
 MONGODB_URL = os.getenv("MONGODB_URL", "mongodb://localhost:27017")
 DATABASE_NAME = "crypto_intelligence_platform"
-# DATABASE_PATH = DATABASE_DIR / "crypto_platform.db"
-# DATABASE_URL = f"sqlite:///{DATABASE_PATH}"
+
+# Redis for Caching and Rate Limiting
+REDIS_URL = os.getenv("REDIS_URL", "redis://localhost:6379/0")
+ENABLE_REDIS = os.getenv("ENABLE_REDIS", "false").lower() == "true"
 
 # ============================================================
 # API CONFIGURATION (CoinGecko - Free, no API key needed)
@@ -104,7 +110,16 @@ EMAIL_CONFIG = {
 }
 
 # ============================================================
-# AUTH SETTINGS
+# NOTIFICATION CONFIGURATION
+# ============================================================
+FIREBASE_CREDENTIALS_PATH = os.getenv("FIREBASE_CREDENTIALS_PATH", "")
+ENABLE_PUSH_NOTIFICATIONS = os.getenv("ENABLE_PUSH_NOTIFICATIONS", "false").lower() == "true"
+
+WEBHOOK_CONFIG = {
+    "discord_url": os.getenv("DISCORD_WEBHOOK_URL", ""),
+    "telegram_token": os.getenv("TELEGRAM_BOT_TOKEN", ""),
+    "telegram_chat_id": os.getenv("TELEGRAM_CHAT_ID", ""),
+}
 # ============================================================
 SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-change-me")
 JWT_ALGORITHM = "HS256"
@@ -135,3 +150,21 @@ OPTIMIZATION_CONFIG = {
     "num_portfolios": 10000,   # Monte Carlo simulation count
     "target_return": 0.15,     # 15% target annual return
 }
+
+# ============================================================
+# CONFIGURATION VALIDATION
+# ============================================================
+def validate_config():
+    """Verify that essential settings are present."""
+    critical_settings = [
+        ("SECRET_KEY", SECRET_KEY),
+    ]
+    
+    missing = [name for name, val in critical_settings if not val or val == "dev-secret-change-me"]
+    
+    if missing:
+        print(f"[!] WARNING: Critical settings missing or using defaults: {', '.join(missing)}")
+        print("[*] Secure your application by setting these in a .env file.")
+
+# Run validation on import
+validate_config()

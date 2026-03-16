@@ -263,19 +263,52 @@ db = MongoDB()
 
 async def connect_to_mongo():
     try:
-        # Reduced timeout for connection check
-        db.client = AsyncIOMotorClient(MONGODB_URL, serverSelectionTimeoutMS=2000)
+        # Robust connection with pooling and timeouts
+        db.client = AsyncIOMotorClient(
+            MONGODB_URL, 
+            serverSelectionTimeoutMS=5000,
+            maxPoolSize=100,
+            minPoolSize=10
+        )
         # Verify connection with a ping
         await db.client.admin.command('ping')
         db.db = db.client[DATABASE_NAME]
         db.is_mock = False
         print(f"✅ Successfully connected to MongoDB at {MONGODB_URL}")
+        
+        # Create necessary indexes
+        await create_indexes()
+        
     except Exception as e:
-        print(f"⚠️  MongoDB not found: {e}")
+        print(f"⚠️  MongoDB connection failed: {e}")
         print("💡 Switching to Dynamic JSON Offline Storage...")
         db.db = MemoryDatabase()
         db.is_mock = True
         await db.db.load_from_file()
+
+async def create_indexes():
+    """Create indexes for optimized performance."""
+    if db.is_mock:
+        return
+        
+    try:
+        # Users indexes
+        await db.db["users"].create_index("email", unique=True)
+        
+        # Market data indexes
+        await db.db["market_data"].create_index([("coin_id", 1), ("timestamp", -1)])
+        await db.db["market_data"].create_index("timestamp")
+        
+        # Portfolios indexes
+        await db.db["portfolios"].create_index("user_id")
+        
+        # Alerts indexes
+        await db.db["alerts"].create_index("user_id")
+        await db.db["alerts"].create_index("is_active")
+        
+        print("🚀 Database indexes verified/created successfully")
+    except Exception as e:
+        print(f"⚠️  Error creating indexes: {e}")
 
 async def close_mongo_connection():
     if db.client:

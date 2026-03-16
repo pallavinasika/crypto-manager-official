@@ -11,6 +11,7 @@ import requests
 from database.mongo_connection import get_database
 from utils.helpers import logger
 from config.settings import COINGECKO_BASE_URL, COINGECKO_API_KEY
+from ai_models.sentiment_analyzer import SentimentAnalyzer
 
 class CryptoDataCollector:
     """
@@ -18,7 +19,7 @@ class CryptoDataCollector:
     Handles rate limiting and MongoDB storage.
     """
 
-    def __init__(self):
+    def __init__(self, redis_url: str = None, enable_redis: bool = False):
         self.base_url = COINGECKO_BASE_URL
         self.session = requests.Session()
         self.session.headers.update({
@@ -28,6 +29,20 @@ class CryptoDataCollector:
         if COINGECKO_API_KEY:
             self.session.headers["x-cg-demo-api-key"] = COINGECKO_API_KEY
         self._rate_limit_delay = 1.5
+        
+        # Redis setup
+        self.enable_redis = enable_redis
+        self.redis = None
+        if enable_redis and redis_url:
+            try:
+                import redis
+                self.redis = redis.from_url(redis_url, decode_responses=True)
+                logger.info("Redis cache enabled in DataCollector")
+            except Exception as e:
+                logger.error(f"Failed to connect to Redis: {e}")
+                self.enable_redis = False
+        
+        self.sentiment_analyzer = SentimentAnalyzer()
 
     def _make_request(self, endpoint: str, params: Dict = None) -> Optional[Dict]:
         url = f"{self.base_url}/{endpoint}"
@@ -59,6 +74,11 @@ class CryptoDataCollector:
         
         market_entries = []
         for coin in data:
+            # Fetch sentiment for key coins (to save time/resources)
+            sentiment = {"score": 0.0, "label": "Neutral"}
+            if per_page <= 10 or coin["id"] in ["bitcoin", "ethereum", "solana"]:
+                sentiment = await self.fetch_news_sentiment(coin["id"])
+                
             entry = {
                 "coin_id": coin["id"],
                 "price": coin["current_price"],
@@ -67,6 +87,8 @@ class CryptoDataCollector:
                 "change_1h": coin.get("price_change_percentage_1h_in_currency"),
                 "change_24h": coin.get("price_change_percentage_24h_in_currency"),
                 "change_7d": coin.get("price_change_percentage_7d_in_currency"),
+                "sentiment_score": sentiment.get("score", 0.0),
+                "sentiment_label": sentiment.get("label", "Neutral"),
                 "circulating_supply": coin.get("circulating_supply"),
                 "total_supply": coin.get("total_supply"),
                 "max_supply": coin.get("max_supply"),
@@ -98,7 +120,18 @@ class CryptoDataCollector:
         return data
 
     async def get_latest_market_data(self, limit: int = 50) -> List[Dict]:
-        """Retrieve the latest market data from MongoDB."""
+        """Retrieve the latest market data from Redis (cache) or MongoDB."""
+        cache_key = f"market_data_latest_{limit}"
+        
+        if self.enable_redis and self.redis:
+            try:
+                import json
+                cached = self.redis.get(cache_key)
+                if cached:
+                    return json.loads(cached)
+            except Exception as e:
+                logger.warning(f"Redis cache read error: {e}")
+
         db = get_database()
         # Find latest timestamp
         latest = await db["market_data"].find_one(sort=[("timestamp", -1)])
@@ -111,11 +144,19 @@ class CryptoDataCollector:
             # Join with metadata
             meta = await db["cryptocurrencies"].find_one({"coin_id": doc["coin_id"]})
             if meta:
-                # Remove _id from meta before updating doc
                 meta.pop("_id", None)
                 doc.update(meta)
             doc["id"] = str(doc.pop("_id", ""))
             results.append(doc)
+            
+        # Store in cache
+        if self.enable_redis and self.redis and results:
+            try:
+                import json
+                self.redis.setex(cache_key, 60, json.dumps(results)) # Cache for 1 minute
+            except Exception as e:
+                logger.warning(f"Redis cache write error: {e}")
+                
         return results
 
     async def fetch_historical_prices(self, coin_id: str, days: int = 365):
@@ -205,6 +246,33 @@ class CryptoDataCollector:
         data = self._make_request("coins/markets", params)
         return data
 
+    async def fetch_news_sentiment(self, coin_id: str):
+        """
+        Fetch latest news for a coin and analyze sentiment.
+        Uses a public RSS feed or mock aggregator for demonstration.
+        """
+        # For demonstration, we'll use a mix of real RSS (if possible) and news headlines
+        # In a production app, you'd use NewsAPI.org or CryptoPanic API.
+        try:
+            # Mock news items for demonstration
+            mock_news = [
+                f"{coin_id.capitalize()} price expected to surge as institutional adoption grows.",
+                f"New regulatory clarity brings confidence to the {coin_id} market.",
+                f"Trading volume for {coin_id} hits all-time high amidst positive sentiment.",
+                f"Concerns over network congestion temporarily dampen {coin_id} outlook.",
+                f"Whale activity suggests a major breakout for {coin_id} is coming."
+            ]
+            
+            # Real world logic would be:
+            # response = self.session.get(f"https://cryptopanic.com/api/v1/posts/?auth_token=TOKEN&currencies={coin_id}")
+            # headlines = [post['title'] for post in response.json()['results']]
+            
+            sentiment = self.sentiment_analyzer.aggregate_sentiment(mock_news)
+            return sentiment
+        except Exception as e:
+            logger.error(f"Error fetching sentiment for {coin_id}: {e}")
+            return {"score": 0.0, "label": "Neutral", "count": 0}
+
     def fetch_global_data(self):
         """Fetch global market data from CoinGecko API."""
         return self._make_request("global")
@@ -221,7 +289,18 @@ class CryptoDataCollector:
             return None
 
     async def get_market_summary(self):
-        """Combine global market stats for the dashboard header."""
+        """Combine global market stats for the dashboard header with caching."""
+        cache_key = "market_summary"
+        
+        if self.enable_redis and self.redis:
+            try:
+                import json
+                cached = self.redis.get(cache_key)
+                if cached:
+                    return json.loads(cached)
+            except Exception as e:
+                logger.warning(f"Redis cache summary read error: {e}")
+
         global_data = self.fetch_global_data()
         fng_data = self.fetch_fear_and_greed_index()
         
@@ -248,7 +327,7 @@ class CryptoDataCollector:
         avg_rsi = max(0, min(100, avg_rsi))
         rsi_label = "Overbought" if avg_rsi > 70 else ("Oversold" if avg_rsi < 30 else "Neutral")
 
-        return {
+        res = {
             "market_cap": global_data.get("data", {}).get("total_market_cap", {}).get("usd"),
             "market_cap_change": global_data.get("data", {}).get("market_cap_change_percentage_24h_usd"),
             "dominance": global_data.get("data", {}).get("market_cap_percentage", {}),
@@ -256,6 +335,15 @@ class CryptoDataCollector:
             "altcoin_season": {"value": f"{altcoin_season:.0f}/100", "label": alt_label},
             "avg_rsi": {"value": f"{avg_rsi:.2f}", "label": rsi_label}
         }
+        
+        if self.enable_redis and self.redis:
+            try:
+                import json
+                self.redis.setex(cache_key, 300, json.dumps(res)) # Cache for 5 minutes
+            except Exception as e:
+                logger.warning(f"Redis cache summary write error: {e}")
+                
+        return res
 
     def fetch_coin_details(self, coin_id: str):
         """Fetch detailed information for a specific cryptocurrency."""

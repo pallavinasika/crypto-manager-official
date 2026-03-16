@@ -1,6 +1,6 @@
 import { Routes, Route, Navigate, useNavigate, NavLink } from 'react-router-dom'
 import { useEffect, useState } from 'react'
-import { LayoutDashboard, Wallet, TrendingUp, Bell, LogOut, User, BarChart3, ShieldCheck } from 'lucide-react'
+import { LayoutDashboard, Wallet, TrendingUp, Bell, LogOut, User, BarChart3, ShieldCheck, Play, FileText } from 'lucide-react'
 import './App.css'
 import Login from './pages/Login.jsx'
 import Register from './pages/Register.jsx'
@@ -9,6 +9,8 @@ import Market from './pages/Market.jsx'
 import Portfolio from './pages/Portfolio.jsx'
 import AIInsights from './pages/AIInsights.jsx'
 import Alerts from './pages/Alerts.jsx'
+import Backtesting from './pages/Backtesting.jsx'
+import TaxReports from './pages/TaxReports.jsx'
 import { apiFetch, API_BASE } from './lib/api.js'
 import { io } from 'socket.io-client'
 
@@ -59,6 +61,12 @@ function Layout({ children, user, onLogout }) {
           <NavLink to="/alerts" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
             <Bell size={20} /> AI Alerts
           </NavLink>
+          <NavLink to="/backtesting" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
+            <Play size={20} /> Backtesting
+          </NavLink>
+          <NavLink to="/tax-reports" className={({ isActive }) => `nav-link ${isActive ? 'active' : ''}`}>
+            <FileText size={20} /> Tax Reports
+          </NavLink>
         </nav>
 
         <div style={{ borderTop: '1px solid var(--border)', paddingTop: '1.5rem' }}>
@@ -92,7 +100,7 @@ export default function App() {
 
   useEffect(() => {
     if (!user) return
-    
+
     const socket = io(API_BASE.replace('/api', ''))
     socket.on('alert_notification', (alert) => {
       console.log('🔔 Alert Notification Received:', alert)
@@ -125,9 +133,9 @@ export default function App() {
       // CRITICAL: Only clear session if we're explicitly unauthorized (401)
       // and the error indicates the token itself is the problem.
       if (err.status === 401) {
-        const isCriticalAuthError = 
-          err.message.includes('User not found') || 
-          err.message.includes('Invalid token') || 
+        const isCriticalAuthError =
+          err.message.includes('User not found') ||
+          err.message.includes('Invalid token') ||
           err.message.includes('session expired');
 
         if (isCriticalAuthError) {
@@ -165,22 +173,24 @@ export default function App() {
   return (
     <>
       {activeNotification && (
-        <NotificationToast 
-          alert={activeNotification} 
-          onDismiss={() => setActiveNotification(null)} 
+        <NotificationToast
+          alert={activeNotification}
+          onDismiss={() => setActiveNotification(null)}
         />
       )}
       <Routes>
-      <Route path="/login" element={!user ? <Login onLogin={checkAuth} /> : <Navigate to="/" />} />
-      <Route path="/register" element={!user ? <Register /> : <Navigate to="/" />} />
+        <Route path="/login" element={!user ? <Login onLogin={checkAuth} /> : <Navigate to="/" />} />
+        <Route path="/register" element={!user ? <Register /> : <Navigate to="/" />} />
 
-      <Route path="/" element={user ? <Layout user={user} onLogout={handleLogout}><Dashboard /></Layout> : <Navigate to="/login" />} />
-      <Route path="/market" element={user ? <Layout user={user} onLogout={handleLogout}><Market /></Layout> : <Navigate to="/login" />} />
-      <Route path="/portfolio" element={user ? <Layout user={user} onLogout={handleLogout}><Portfolio /></Layout> : <Navigate to="/login" />} />
-      <Route path="/ai-insights" element={user ? <Layout user={user} onLogout={handleLogout}><AIInsights /></Layout> : <Navigate to="/login" />} />
-      <Route path="/alerts" element={user ? <Layout user={user} onLogout={handleLogout}><Alerts /></Layout> : <Navigate to="/login" />} />
+        <Route path="/" element={user ? <Layout user={user} onLogout={handleLogout}><Dashboard /></Layout> : <Navigate to="/login" />} />
+        <Route path="/market" element={user ? <Layout user={user} onLogout={handleLogout}><Market /></Layout> : <Navigate to="/login" />} />
+        <Route path="/portfolio" element={user ? <Layout user={user} onLogout={handleLogout}><Portfolio /></Layout> : <Navigate to="/login" />} />
+        <Route path="/ai-insights" element={user ? <Layout user={user} onLogout={handleLogout}><AIInsights /></Layout> : <Navigate to="/login" />} />
+        <Route path="/alerts" element={user ? <Layout user={user} onLogout={handleLogout}><Alerts /></Layout> : <Navigate to="/login" />} />
+        <Route path="/backtesting" element={user ? <Layout user={user} onLogout={handleLogout}><Backtesting /></Layout> : <Navigate to="/login" />} />
+        <Route path="/tax-reports" element={user ? <Layout user={user} onLogout={handleLogout}><TaxReports /></Layout> : <Navigate to="/login" />} />
 
-      <Route path="*" element={<Navigate to="/" replace />} />
+        <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </>
   )

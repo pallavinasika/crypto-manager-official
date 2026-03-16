@@ -110,7 +110,7 @@ export default function Market() {
     const saved = localStorage.getItem('crypto_watchlist')
     return saved ? JSON.parse(saved) : []
   })
-  
+
   // Alert Modal State
   const [isAlertModalOpen, setIsAlertModalOpen] = useState(false)
   const [activeAlerts, setActiveAlerts] = useState([])
@@ -153,7 +153,7 @@ export default function Market() {
 
   const handleChatSubmit = async (e, forcedMsg = null) => {
     if (e && e.key !== 'Enter' && !forcedMsg) return
-    
+
     const userMsg = (forcedMsg || chatMessage).trim()
     if (!userMsg || isChatLoading) return
 
@@ -192,7 +192,7 @@ export default function Market() {
         setMarketData(mData.data || [])
         setSummary(sData.data || null)
         setActiveAlerts(aData.data || [])
-        
+
         // Default alert coin if data exists
         if (mData.data?.length > 0) {
           setAlertForm(prev => ({ ...prev, coin_id: mData.data[0].coin_id }))
@@ -252,9 +252,9 @@ export default function Market() {
   }
 
   const toggleWatchlist = (coinId) => {
-    setWatchlist(prev => 
-      prev.includes(coinId) 
-        ? prev.filter(id => id !== coinId) 
+    setWatchlist(prev =>
+      prev.includes(coinId)
+        ? prev.filter(id => id !== coinId)
         : [...prev, coinId]
     )
   }
@@ -298,8 +298,8 @@ export default function Market() {
 
     // Search Filtering
     if (search) {
-      data = data.filter(coin => 
-        coin.name.toLowerCase().includes(search.toLowerCase()) || 
+      data = data.filter(coin =>
+        coin.name.toLowerCase().includes(search.toLowerCase()) ||
         coin.symbol.toLowerCase().includes(search.toLowerCase())
       )
     }
@@ -313,34 +313,34 @@ export default function Market() {
     <div style={{ paddingBottom: '4rem' }}>
       {/* Top Stats */}
       <div style={{ display: 'flex', gap: '1rem', overflowX: 'auto', paddingBottom: '1rem', marginBottom: '1.5rem' }}>
-        <MarketStatCard 
-          title="Market Cap" 
-          value={formatLargeNumber(summary?.market_cap)} 
-          change={summary?.market_cap_change} 
+        <MarketStatCard
+          title="Market Cap"
+          value={formatLargeNumber(summary?.market_cap)}
+          change={summary?.market_cap_change}
         />
-        <MarketStatCard 
-          title="Fear & Greed" 
-          value={summary?.fear_and_greed?.value || 50} 
+        <MarketStatCard
+          title="Fear & Greed"
+          value={summary?.fear_and_greed?.value || 50}
           classification={summary?.fear_and_greed?.value_classification || 'Neutral'}
         />
-        <MarketStatCard 
-          title="Altcoin Season" 
-          value={summary?.altcoin_season?.value || "50/100"} 
+        <MarketStatCard
+          title="Altcoin Season"
+          value={summary?.altcoin_season?.value || "50/100"}
           classification={summary?.altcoin_season?.label || "Neutral"}
         />
-        <MarketStatCard 
-          title="Average RSI" 
-          value={summary?.avg_rsi?.value || "50.00"} 
+        <MarketStatCard
+          title="Average RSI"
+          value={summary?.avg_rsi?.value || "50.00"}
           classification={summary?.avg_rsi?.label || "Neutral"}
         />
       </div>
 
       {/* Alert Ticker */}
-      <div style={{ 
-        background: 'rgba(0, 212, 255, 0.05)', 
-        border: '1px solid var(--border)', 
-        borderRadius: '12px', 
-        padding: '0.8rem 1.2rem', 
+      <div style={{
+        background: 'rgba(0, 212, 255, 0.05)',
+        border: '1px solid var(--border)',
+        borderRadius: '12px',
+        padding: '0.8rem 1.2rem',
         marginBottom: '1.5rem',
         display: 'flex',
         alignItems: 'center',
@@ -349,7 +349,7 @@ export default function Market() {
       }}>
         <div style={{ background: 'var(--primary)', color: 'black', padding: '3px 10px', borderRadius: '6px', fontWeight: 800, fontSize: '0.75rem', letterSpacing: '0.5px' }}>NEW</div>
         <p style={{ flex: 1, color: 'var(--text-main)', fontWeight: 500 }}>Bitcoin ETFs see $349M single-day outflows as market corrects.</p>
-        <div 
+        <div
           onClick={() => setIsAlertModalOpen(true)}
           style={{ display: 'flex', alignItems: 'center', gap: '8px', cursor: 'pointer', color: 'var(--primary)', fontWeight: 600 }}
         >
@@ -360,10 +360,10 @@ export default function Market() {
 
       {/* Active Alerts List */}
       {activeAlerts.length > 0 && (
-        <div style={{ 
-          display: 'flex', 
-          gap: '12px', 
-          overflowX: 'auto', 
+        <div style={{
+          display: 'flex',
+          gap: '12px',
+          overflowX: 'auto',
           paddingBottom: '1.5rem',
           scrollbarWidth: 'none',
           msOverflowStyle: 'none'
@@ -382,13 +382,13 @@ export default function Market() {
             }}>
               <Bell size={14} color="var(--secondary)" />
               <span>{alert.coin_id.toUpperCase()} {alert.alert_type === 'price_above' ? '≥' : '≤'} ${alert.threshold.toLocaleString()}</span>
-              <div 
+              <div
                 style={{ width: 8, height: 8, borderRadius: '50%', background: alert.is_active ? '#00e676' : '#ff1744' }}
                 title={alert.is_active ? 'Monitoring' : 'Triggered'}
               ></div>
-              <X 
-                size={14} 
-                style={{ cursor: 'pointer', color: 'rgba(255,255,255,0.6)', marginLeft: '4px', zIndex: 10 }} 
+              <X
+                size={14}
+                style={{ cursor: 'pointer', color: 'rgba(255,255,255,0.6)', marginLeft: '4px', zIndex: 10 }}
                 onClick={(e) => {
                   e.stopPropagation();
                   handleDeleteAlert(alert.id);
@@ -427,11 +427,11 @@ export default function Market() {
               <Bell size={24} color="var(--primary)" />
               Create AI Alert
             </h2>
-            
+
             <form onSubmit={handleCreateAlert}>
               <div style={{ marginBottom: '1.2rem' }}>
                 <label style={{ display: 'block', fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '8px' }}>Select Asset</label>
-                <select 
+                <select
                   value={alertForm.coin_id}
                   onChange={(e) => setAlertForm({ ...alertForm, coin_id: e.target.value })}
                   style={{ width: '100%' }}
@@ -443,10 +443,10 @@ export default function Market() {
                   ))}
                 </select>
               </div>
-              
+
               <div style={{ marginBottom: '1.2rem' }}>
                 <label style={{ display: 'block', fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '8px' }}>Alert Type</label>
-                <select 
+                <select
                   value={alertForm.alert_type}
                   onChange={(e) => setAlertForm({ ...alertForm, alert_type: e.target.value })}
                   style={{ width: '100%' }}
@@ -455,11 +455,11 @@ export default function Market() {
                   <option value="price_below">Price goes below</option>
                 </select>
               </div>
-              
+
               <div style={{ marginBottom: '2rem' }}>
                 <label style={{ display: 'block', fontSize: '0.85rem', color: 'var(--text-muted)', marginBottom: '8px' }}>Price Threshold (USD)</label>
-                <input 
-                  type="number" 
+                <input
+                  type="number"
                   step="any"
                   placeholder="e.g. 75000"
                   value={alertForm.threshold}
@@ -468,16 +468,16 @@ export default function Market() {
                   style={{ width: '100%', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border)', borderRadius: '8px', padding: '0.8rem', color: 'white' }}
                 />
               </div>
-              
+
               <div style={{ display: 'flex', gap: '1rem' }}>
-                <button 
+                <button
                   type="button"
                   onClick={() => setIsAlertModalOpen(false)}
                   style={{ flex: 1, padding: '0.8rem', background: 'rgba(255,255,255,0.05)', border: '1px solid var(--border)', borderRadius: '10px', color: 'white', cursor: 'pointer' }}
                 >
                   Cancel
                 </button>
-                <button 
+                <button
                   type="submit"
                   disabled={isSubmitting}
                   style={{ flex: 1, padding: '0.8rem', background: 'linear-gradient(90deg, var(--primary), var(--secondary))', border: 'none', borderRadius: '10px', color: 'black', fontWeight: 700, cursor: 'pointer' }}
@@ -494,8 +494,8 @@ export default function Market() {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2rem', gap: '1.5rem', flexWrap: 'wrap' }}>
         <div className="category-scroll-container" style={{ display: 'flex', gap: '0.8rem', overflowX: 'auto', flex: 1, paddingBottom: '4px', scrollbarWidth: 'none' }}>
           {categories.map(cat => (
-            <button 
-              key={cat} 
+            <button
+              key={cat}
               className={`category-pill ${category === cat ? 'active' : ''}`}
               onClick={() => setCategory(cat)}
               style={{ fontWeight: 600, fontSize: '0.8rem' }}
@@ -508,26 +508,26 @@ export default function Market() {
         <div style={{ display: 'flex', gap: '1rem', alignItems: 'center' }}>
           <div style={{ position: 'relative' }}>
             <Search size={16} color="var(--text-muted)" style={{ position: 'absolute', left: '14px', top: '50%', transform: 'translateY(-50%)' }} />
-            <input 
-              type="text" 
-              placeholder="Search assets..." 
+            <input
+              type="text"
+              placeholder="Search assets..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
-              style={{ 
-                paddingLeft: '42px', 
-                width: '260px', 
+              style={{
+                paddingLeft: '42px',
+                width: '260px',
                 background: 'rgba(13, 27, 42, 0.4)',
                 borderRadius: '10px',
                 fontSize: '0.9rem'
               }}
             />
           </div>
-          
+
           <div style={{ display: 'flex', background: 'rgba(255,255,255,0.05)', borderRadius: '10px', padding: '4px', border: '1px solid rgba(255,255,255,0.05)' }}>
-            <button 
-              onClick={() => setViewMode('list')} 
-              style={{ 
-                padding: '8px 12px', 
+            <button
+              onClick={() => setViewMode('list')}
+              style={{
+                padding: '8px 12px',
                 background: viewMode === 'list' ? 'rgba(255,255,255,0.1)' : 'transparent',
                 border: 'none',
                 borderRadius: '8px',
@@ -539,10 +539,10 @@ export default function Market() {
             >
               <ListIcon size={20} />
             </button>
-            <button 
-              onClick={() => setViewMode('heatmap')} 
-              style={{ 
-                padding: '8px 12px', 
+            <button
+              onClick={() => setViewMode('heatmap')}
+              style={{
+                padding: '8px 12px',
                 background: viewMode === 'heatmap' ? 'rgba(255,255,255,0.1)' : 'transparent',
                 border: 'none',
                 borderRadius: '8px',
@@ -572,7 +572,8 @@ export default function Market() {
                 <th style={{ textAlign: 'right' }}>7d %</th>
                 <th style={{ textAlign: 'right' }}>Market Cap</th>
                 <th style={{ textAlign: 'right' }}>Volume(24h)</th>
-                <th style={{ width: '200px' }}>Circulating Supply</th>
+                <th style={{ width: '180px' }}>Circulating Supply</th>
+                <th style={{ width: '100px', textAlign: 'center' }}>Sentiment</th>
                 <th style={{ width: '120px' }}>Last 7 Days</th>
               </tr>
             </thead>
@@ -580,14 +581,14 @@ export default function Market() {
               {filteredData.map((coin, i) => (
                 <tr key={coin.coin_id}>
                   <td>
-                    <button 
+                    <button
                       onClick={() => toggleWatchlist(coin.coin_id)}
                       className="watchlist-btn"
                     >
-                      <Star 
-                        size={16} 
-                        fill={watchlist.includes(coin.coin_id) ? 'var(--primary)' : 'none'} 
-                        color={watchlist.includes(coin.coin_id) ? 'var(--primary)' : 'var(--text-muted)'} 
+                      <Star
+                        size={16}
+                        fill={watchlist.includes(coin.coin_id) ? 'var(--primary)' : 'none'}
+                        color={watchlist.includes(coin.coin_id) ? 'var(--primary)' : 'var(--text-muted)'}
                       />
                     </button>
                   </td>
@@ -625,6 +626,11 @@ export default function Market() {
                       </div>
                     </div>
                   </td>
+                  <td style={{ textAlign: 'center' }}>
+                    <div className={`sentiment-badge ${coin.sentiment_label?.toLowerCase() || 'neutral'}`}>
+                      {coin.sentiment_label || 'Neutral'}
+                    </div>
+                  </td>
                   <td>
                     <Sparkline data={coin.sparkline_7d} color={coin.change_7d >= 0 ? '#00e676' : '#ff1744'} />
                   </td>
@@ -647,6 +653,12 @@ export default function Market() {
       {/* AI Chat History Container */}
       {isChatOpen && (
         <div className="ai-chat-container">
+          <div className="chat-header">
+            <h3><Sparkles size={16} /> AI Market Intelligence</h3>
+            <button className="close-chat" onClick={() => setIsChatOpen(false)}>
+              <X size={18} />
+            </button>
+          </div>
           <div className="chat-messages">
             {chatHistory.map((msg, i) => (
               <div key={i} className={`chat-message ${msg.type}`}>
@@ -666,7 +678,7 @@ export default function Market() {
           {/* Quick Suggestions */}
           <div style={{ padding: '0 1rem 1rem', display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
             {['Market Sentiment', 'Top Movers', 'Portfolio Risk'].map(hint => (
-              <button 
+              <button
                 key={hint}
                 className="category-pill"
                 style={{ fontSize: '0.75rem', padding: '4px 12px' }}
@@ -682,10 +694,10 @@ export default function Market() {
       )}
 
       {/* AI Chat Bar */}
-      <div style={{ 
-        position: 'fixed', 
-        bottom: '2.5rem', 
-        left: '50%', 
+      <div style={{
+        position: 'fixed',
+        bottom: '2.5rem',
+        left: '50%',
         transform: 'translateX(-50%)',
         zIndex: 100,
         width: '100%',
@@ -694,15 +706,15 @@ export default function Market() {
         justifyContent: 'center'
       }}>
         <div className="ai-chat-bar">
-          <MessageSquare 
-            size={20} 
-            color={isChatOpen ? 'var(--primary)' : 'var(--text-muted)'} 
+          <MessageSquare
+            size={20}
+            color={isChatOpen ? 'var(--primary)' : 'var(--text-muted)'}
             style={{ cursor: 'pointer' }}
             onClick={() => setIsChatOpen(!isChatOpen)}
           />
-          <input 
-            type="text" 
-            placeholder="Ask AI about the market..." 
+          <input
+            type="text"
+            placeholder="Ask AI about the market..."
             className="ai-chat-input"
             value={chatMessage}
             onChange={(e) => setChatMessage(e.target.value)}
