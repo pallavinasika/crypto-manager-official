@@ -826,10 +826,6 @@ async def ping():
 async def health_check():
     return {"status": "healthy", "timestamp": datetime.utcnow()}
 
-@app.get("/")
-@app.head("/")
-async def root():
-    return {"status": "ok", "message": "AI Crypto Intelligence Platform Technical API"}
 
 @app.post("/api/exchange/sync", summary="Sync with exchange API")
 async def sync_exchange(exchange_id: str, api_keys: Dict, current_user: User = Depends(get_current_user)):
@@ -1019,6 +1015,7 @@ async def shutdown():
     await close_mongo_connection()
 
 @app.get("/{full_path:path}")
+@app.head("/{full_path:path}")
 async def serve_react_app(request: Request, full_path: str):
     """Serve the React application for any non-API routes."""
     # API and reports routes should return 404 if not matched by their specific handlers
