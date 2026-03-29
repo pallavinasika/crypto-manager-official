@@ -8,6 +8,7 @@ import os
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
 
 from fastapi import FastAPI, HTTPException, Query, Request, Depends, BackgroundTasks
+from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -1028,8 +1029,45 @@ async def serve_react_app(request: Request, full_path: str):
         if index_file.exists():
             return await StaticFiles(directory=str(WEB_DIST_DIR), html=True).get_response("index.html", request.scope)
         else:
-            return {"status": "error", "message": "index.html not found in dist folder", "path": str(index_file)}
-    return {"status": "error", "message": "Frontend build not found", "path": str(WEB_DIST_DIR)}
+            return HTMLResponse(content=f"""
+                <html>
+                    <body style='font-family: sans-serif; text-align: center; padding: 50px; background: #0f172a; color: white;'>
+                        <h1 style='color: #38bdf8;'>🚀 AI Crypto Platform - Backend Online</h1>
+                        <p>Backend is working, but <b>index.html</b> was not found in the dist folder.</p>
+                        <p style='color: #94a3b8;'>Path: {index_file}</p>
+                        <div style='background: #1e293b; padding: 20px; border-radius: 8px; display: inline-block; margin-top: 20px;'>
+                            <h3>Follow these steps to fix:</h3>
+                            <ol style='text-align: left;'>
+                                <li>Run <code>npm run build</code> in your local <code>web</code> directory.</li>
+                                <li>Ensure the <code>dist</code> folder is created.</li>
+                                <li>Check your Render <b>Build Command</b> (should include frontend build).</li>
+                            </ol>
+                        </div>
+                    </body>
+                </html>
+            """, status_code=200)
+            
+    return HTMLResponse(content=f"""
+        <html>
+            <body style='font-family: sans-serif; text-align: center; padding: 50px; background: #0f172a; color: white;'>
+                <h1 style='color: #38bdf8;'>🚀 AI Crypto Platform - Backend Online</h1>
+                <p>Backend is working perfectly! ✅</p>
+                <div style='background: #1e293b; padding: 30px; border-radius: 12px; display: inline-block; margin: 20px auto; max-width: 600px; border: 1px solid #334155;'>
+                    <h2 style='color: #fb7185;'>⚠️ Frontend Build Missing</h2>
+                    <p>The application cannot find the compiled React files at: <br><code>{WEB_DIST_DIR}</code></p>
+                    
+                    <h3 style='text-align: left; margin-top: 30px;'>Recommended Fixes:</h3>
+                    <ul style='text-align: left; line-height: 1.6;'>
+                        <li><b>Option A (Easy):</b> In Render Settings, change <b>Environment</b> from <code>Python</code> to <b><code>Docker</code></b>. I've already provided a <code>Dockerfile</code> that handles everything.</li>
+                        <li><b>Option B (Advanced):</b> In Render Settings, change <b>Build Command</b> to:<br>
+                            <code style='background: #000; padding: 5px; display: block; margin: 10px 0;'>chmod +x render-build.sh && ./render-build.sh</code>
+                        </li>
+                    </ul>
+                    <p style='margin-top: 20px; font-size: 0.9em; color: #94a3b8;'>Note: Option A is more stable as it guarantees both Node.js and Python are available.</p>
+                </div>
+            </body>
+        </html>
+    """, status_code=200)
 
 if __name__ == "__main__":
     uvicorn.run(socket_app, host=API_HOST, port=API_PORT)
